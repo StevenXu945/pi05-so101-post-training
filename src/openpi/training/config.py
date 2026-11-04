@@ -20,8 +20,11 @@ import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
+import openpi.policies.robotwin_policy as robotwin_policy
+import openpi.policies.so101_policy as so101_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
+from openpi.shared import nnx_utils
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.misc.polaris_config as polaris_config
 import openpi.training.misc.roboarena_config as roboarena_config
@@ -65,6 +68,8 @@ class AssetsConfig:
 class DataConfig:
     # LeRobot repo id. If None, fake data will be created.
     repo_id: str | None = None
+    # Optional RECAP-only episode filtering; legacy datasets retain their original behavior.
+    recap_split: str | None = dataclasses.field(default=None, kw_only=True)
     # Directory within the assets directory containing the data assets.
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
@@ -109,6 +114,7 @@ class ModelTransformFactory(GroupFactory):
 
     # If provided, will determine the default prompt that be used by the model.
     default_prompt: str | None = None
+    adv_dropout_prob: float = 0.0
 
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
         match model_config.model_type:
@@ -132,6 +138,8 @@ class ModelTransformFactory(GroupFactory):
                         _transforms.TokenizePrompt(
                             _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
                             discrete_state_input=model_config.discrete_state_input,
+                            recap=model_config.recap,
+                            adv_dropout_prob=self.adv_dropout_prob,
                         ),
                         _transforms.PadStatesAndActions(model_config.action_dim),
                     ],
@@ -356,6 +364,83 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotSO101DataConfig(DataConfigFactory):
+    """SO-101 data recorded with front and wrist cameras and six joint positions."""
+
+    use_delta_joint_actions: bool = True
+    default_prompt: str = "Grab the toy into the box"
+    adv_dropout_prob: float = 0.0
+    recap_split: str | None = None
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        **({"adv_ind": "adv_ind"} if getattr(model_config, "recap", False) else {}),
+                        "observation/image": "observation.images.front",
+                        "observation/wrist_image": "observation.images.wrist",
+                        "observation/state": "observation.state",
+                        "actions": "action",
+                    }
+                )
+            ]
+        )
+        data_transforms = _transforms.Group(
+            inputs=[so101_policy.SO101Inputs(model_type=model_config.model_type)],
+            outputs=[so101_policy.SO101Outputs()],
+        )
+        if self.use_delta_joint_actions:
+            delta_mask = _transforms.make_bool_mask(5, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_mask)],
+            )
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=ModelTransformFactory(default_prompt=self.default_prompt, adv_dropout_prob=self.adv_dropout_prob)(model_config),
+            action_sequence_keys=("action",),
+            recap_split=self.recap_split,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotRoboTwinDataConfig(DataConfigFactory):
+    """RoboTwin LeRobot v2.1 data: three RGB cameras and 14 joint targets."""
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transforms = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/image": "observation.images.cam_high",
+                        "observation/left_wrist_image": "observation.images.cam_left_wrist",
+                        "observation/right_wrist_image": "observation.images.cam_right_wrist",
+                        "observation/state": "observation.state",
+                        "actions": "action",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transforms,
+            data_transforms=_transforms.Group(
+                inputs=[robotwin_policy.RoboTwinInputs()],
+                outputs=[robotwin_policy.RoboTwinOutputs()],
+            ),
+            model_transforms=ModelTransformFactory()(model_config),
+            action_sequence_keys=("action",),
+            prompt_from_task=True,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class RLDSDroidDataConfig(DataConfigFactory):
     """
     Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
@@ -514,6 +599,10 @@ class TrainConfig:
     log_interval: int = 100
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
+    # Limit concurrent checkpoint writes to reduce host RAM usage, if needed.
+    checkpoint_save_concurrent_gb: int | None = None
+    # Save only trainable weights; frozen weights are reloaded from weight_loader.
+    checkpoint_trainable_only: bool = False
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
     keep_period: int | None = 5000
 
@@ -762,6 +851,51 @@ _CONFIGS = [
         num_train_steps=30_000,
     ),
     #
+    # SO-101 LoRA fine-tuning on the converted local LeRobot v2.1 dataset.
+    TrainConfig(
+        name="pi05_so101_lora_finetune",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=16,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotSO101DataConfig(repo_id="local/so101_train_dataset"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("./pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        batch_size=2,
+        checkpoint_save_concurrent_gb=3,
+        checkpoint_trainable_only=True,
+        num_train_steps=30_000,
+    ),
+    # Small RoboTwin v2.1 subset for validating the independent pi0.5 LoRA pipeline.
+    TrainConfig(
+        name="pi05_robotwin_50ep_lora_finetune",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=16,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotRoboTwinDataConfig(repo_id="RoboTwin_lerobot_v21_50ep"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("./pi05_base/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        ema_decay=None,
+        batch_size=2,
+        checkpoint_save_concurrent_gb=3,
+        checkpoint_trainable_only=True,
+        num_train_steps=30_000,
+    ),
     # Fine-tuning Aloha configs.
     #
     # This is a test config that is used to illustate how train on a custom LeRobot dataset.
@@ -969,6 +1103,25 @@ _CONFIGS = [
     *roboarena_config.get_roboarena_configs(),
     *polaris_config.get_polaris_configs(),
 ]
+
+# RECAP keeps the base loader path stable for trainable-only checkpoint serving.
+_so101_base = next(c for c in _CONFIGS if c.name == "pi05_so101_lora_finetune")
+_recap_model = dataclasses.replace(_so101_base.model, recap=True, max_token_len=224)
+for _name, _dropout in (("pi05_so101_recap_lora", 0.3), ("pi05_so101_recap_lora_infer", 0.0)):
+    _CONFIGS.append(dataclasses.replace(
+        _so101_base, name=_name, model=_recap_model, batch_size=1,
+        freeze_filter=nnx.Any(_so101_base.freeze_filter, nnx_utils.PathRegex(".*img.*")),
+        data=LeRobotSO101DataConfig(repo_id="local/so101_stack_recap_labeled_v21", recap_split="train",
+            default_prompt="Stack the red cube on top of the blue cube", adv_dropout_prob=_dropout),
+        weight_loader=weight_loaders.LayeredCheckpointWeightLoader(
+            params_path="./pi05_base/params",
+            adapter_params_path="./checkpoints/pi05_so101_lora_finetune/so101_run_1/29999/params",
+            frozen_seed_params_path="./checkpoints/pi05_so101_lora_finetune/so101_run_1/29999/params"),
+    ))
+
+_recap_initial = next(c for c in _CONFIGS if c.name == "pi05_so101_recap_lora")
+_CONFIGS.append(dataclasses.replace(_recap_initial, name="pi05_so101_recap_lora_relabeled",
+    data=dataclasses.replace(_recap_initial.data, repo_id="local/so101_stack_recap_labeled_v21")))
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
     raise ValueError("Config names must be unique.")

@@ -1,0 +1,3 @@
+lerobot[feetech,dataset] @ git+https://github.com/huggingface/lerobot.git@145cc7ea53e5864bd5efec4e9bb70ee799e47bd8
+msgpack>=1.0.5
+websockets>=11

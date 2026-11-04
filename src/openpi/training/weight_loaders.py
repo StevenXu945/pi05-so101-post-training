@@ -55,6 +55,47 @@ class CheckpointWeightLoader(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class LayeredCheckpointWeightLoader:
+    """Restore base + a trainable-only adapter; params_path always names the base."""
+    params_path: str
+    adapter_params_path: str
+    frozen_seed_params_path: str | None = None
+
+    def load_frozen_base(self, *, as_numpy=False, dtype=None):
+        kwargs = {"restore_type": np.ndarray} if as_numpy else {}
+        if dtype is not None:
+            kwargs["dtype"] = dtype
+        base = _model.restore_params(download.maybe_download(self.params_path), **kwargs)
+        if self.frozen_seed_params_path is None:
+            return base
+        seed = _model.restore_params(download.maybe_download(self.frozen_seed_params_path), **kwargs)
+        flat = flax.traverse_util.flatten_dict(base)
+        flat.update(flax.traverse_util.flatten_dict(seed))
+        return flax.traverse_util.unflatten_dict(flat)
+
+    def load(self, params: at.Params) -> at.Params:
+        base = self.load_frozen_base(as_numpy=True)
+        adapter = base if self.adapter_params_path == self.frozen_seed_params_path else _model.restore_params(
+            download.maybe_download(self.adapter_params_path), restore_type=np.ndarray)
+        flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
+        flat = flax.traverse_util.flatten_dict(base, sep="/")
+        updates = flax.traverse_util.flatten_dict(adapter, sep="/")
+        if not updates:
+            raise ValueError("Adapter checkpoint is empty")
+        for key, value in updates.items():
+            if key not in flat_ref or value.shape != flat_ref[key].shape:
+                raise ValueError(f"Incompatible adapter leaf: {key}")
+            flat[key] = value
+        merged = _merge_params(flax.traverse_util.unflatten_dict(flat, sep="/"), params, missing_regex=".*lora.*")
+        if set(flax.traverse_util.flatten_dict(merged, sep="/")) != set(flat_ref):
+            raise ValueError("Base + adapter do not cover the model parameters")
+        for key, value in flax.traverse_util.flatten_dict(merged, sep="/").items():
+            if value.shape != flat_ref[key].shape:
+                raise ValueError(f"Incompatible base leaf: {key}")
+        return merged
+
+
+@dataclasses.dataclass(frozen=True)
 class PaliGemmaWeightLoader(WeightLoader):
     """Loads weights from the official PaliGemma checkpoint.
 

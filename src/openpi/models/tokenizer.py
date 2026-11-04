@@ -19,18 +19,30 @@ class PaligemmaTokenizer:
         with path.open("rb") as f:
             self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
 
-    def tokenize(self, prompt: str, state: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    def tokenize(self, prompt: str, state: np.ndarray | None = None, *,
+                 adv_ind: str | None = None, adv_dropout_prob: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
         cleaned_text = prompt.strip().replace("_", " ").replace("\n", " ")
+        if not 0 <= adv_dropout_prob <= 1:
+            raise ValueError("adv_dropout_prob must be in [0, 1]")
+        if adv_ind is not None and adv_ind not in {"positive", "negative", "none"}:
+            raise ValueError(f"Invalid advantage condition: {adv_ind}")
+        if adv_ind is not None and adv_dropout_prob and np.random.random() < adv_dropout_prob:
+            adv_ind = None
         if state is not None:
             # This is the Pi05 format, where the state is part of the discrete language input.
             discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
             state_str = " ".join(map(str, discretized_state))
             full_prompt = f"Task: {cleaned_text}, State: {state_str};\nAction: "
+            if adv_ind is not None:
+                full_prompt = f"Task: {cleaned_text}, State: {state_str}, Advantage: {adv_ind};\nAction: "
             tokens = self._tokenizer.encode(full_prompt, add_bos=True)
         else:
             # This is the Pi0 format, where the state is part of the continuous action expert input.
             # tokenize "\n" separately as the "start of answer" token
-            tokens = self._tokenizer.encode(cleaned_text, add_bos=True) + self._tokenizer.encode("\n")
+            if adv_ind is None:
+                tokens = self._tokenizer.encode(cleaned_text, add_bos=True) + self._tokenizer.encode("\n")
+            else:
+                tokens = self._tokenizer.encode(f"Task: {cleaned_text}, Advantage: {adv_ind};\nAction: ", add_bos=True)
         tokens_len = len(tokens)
         if tokens_len < self._max_len:
             padding = [False] * (self._max_len - tokens_len)

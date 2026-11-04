@@ -1,323 +1,489 @@
-# openpi
+# π₀.₅ Post-Training and Deployment: SO-101, RoboTwin 2.0, Guided RTC, and RECAP
 
-openpi holds open-source models and packages for robotics, published by the [Physical Intelligence team](https://www.physicalintelligence.company/).
+Built on [openpi](https://github.com/Physical-Intelligence/openpi), this project provides:
 
-Currently, this repo contains three types of models:
-- the [π₀ model](https://www.physicalintelligence.company/blog/pi0), a flow-based vision-language-action model (VLA).
-- the [π₀-FAST model](https://www.physicalintelligence.company/research/fast), an autoregressive VLA, based on the FAST action tokenizer.
-- the [π₀.₅ model](https://www.physicalintelligence.company/blog/pi05), an upgraded version of π₀ with better open-world generalization trained with [knowledge insulation](https://www.physicalintelligence.company/research/knowledge_insulation). Note that, in this repository, we currently only support the flow matching head for both $\pi_{0.5}$ training and inference.
+- **π₀.₅ post-training and deployment**: LoRA post-training, policy serving, and inference on SO-101 hardware and in RoboTwin 2.0 simulation.
+- **SO-101 Guided RTC**: prefix-guided real-time chunking that overlaps policy inference with action execution on hardware.
+- **SO-101 RECAP implementation**: autonomous and human-intervention rollout collection, value-model training, advantage labeling, and iterative advantage-conditioned policy training.
 
-For all models, we provide _base model_ checkpoints, pre-trained on 10k+ hours of robot data, and examples for using them out of the box or fine-tuning them to your own datasets.
+RECAP starts from task-specific SFT and does not reproduce the full official π*₀.₆ pretraining pipeline. Hardware examples use `Grab the toy into the box`; keep task instructions consistent across collection, training, and inference.
 
-This is an experiment: $\pi_0$ was developed for our own robots, which differ from the widely used platforms such as [ALOHA](https://tonyzhaozh.github.io/aloha/) and [DROID](https://droid-dataset.github.io/), and though we are optimistic that researchers and practitioners will be able to run creative new experiments adapting $\pi_0$ to their own platforms, we do not expect every such attempt to be successful. All this is to say: $\pi_0$ may or may not work for you, but you are welcome to try it and see!
+## Demo Videos
 
-## Updates
+Replace “Coming soon” with video links or GitHub video attachments.
 
-- [Sept 2025] We released PyTorch support in openpi.
-- [Sept 2025] We released pi05, an upgraded version of pi0 with better open-world generalization.
-- [Sept 2025]: We have added an [improved idle filter](examples/droid/README_train.md#data-filtering) for DROID training.
-- [Jun 2025]: We have added [instructions](examples/droid/README_train.md) for using `openpi` to train VLAs on the full [DROID dataset](https://droid-dataset.github.io/). This is an approximate open-source implementation of the training pipeline used to train pi0-FAST-DROID. 
+| Category | Demo | Video |
+|---|---|---|
+| SO-101 | Data collection: three synchronized views combined | Coming soon |
+| SO-101 | Standard inference | Coming soon |
+| SO-101 | RTC inference | Coming soon |
+| RoboTwin | adjust bottle inference: clip 1 | Coming soon |
+| RoboTwin | adjust bottle inference: clip 2 | Coming soon |
+| RECAP | Autonomous inference: leader and follower in the same view | Coming soon |
+| RECAP | Human intervention: correction and return to policy control | Coming soon |
 
+## Contents
 
-## Requirements
+- [Environments and Base Weights](#environment)
+- [SO-101 Calibration, Post-Training, Deployment, and RTC](#so101)
+- [RoboTwin 2.0 Post-Training and Simulation](#robotwin)
+- [SO-101 RECAP Workflow](#recap)
 
-To run the models in this repository, you will need an NVIDIA GPU with at least the following specifications. These estimations assume a single GPU, but you can also use multiple GPUs with model parallelism to reduce per-GPU memory requirements by configuring `fsdp_devices` in the training config. Please also note that the current training script does not yet support multi-node training.
+<a id="environment"></a>
+## 1. Environments and Base Weights
 
-| Mode               | Memory Required | Example GPU        |
-| ------------------ | --------------- | ------------------ |
-| Inference          | > 8 GB          | RTX 4090           |
-| Fine-Tuning (LoRA) | > 22.5 GB       | RTX 4090           |
-| Fine-Tuning (Full) | > 70 GB         | A100 (80GB) / H100 |
+Development setup: **Ubuntu 22.04 · RTX 3090 Ti (24 GB VRAM) · 32 GB RAM**. Adjust batch size, training steps, frozen modules, data-loader workers, and validation frequency to suit your hardware.
 
-The repo has been tested with Ubuntu 22.04, we do not currently support other operating systems.
+Use separate environments to avoid dependency conflicts:
 
-## Installation
+| Environment | Python | Purpose |
+|---|---|---|
+| Root `.venv` | 3.11, using the project lockfile | openpi policy training, normalization statistics, and serving |
+| Conda `so101_hil_lite` | 3.12 | SO-101 calibration, collection, hardware clients, and data conversion/merging |
+| Conda `openpi-recap-value` | 3.11 | Independent value-model training and advantage labeling |
+| Conda `RoboTwin` | 3.10 | RoboTwin simulation and evaluation clients |
 
-When cloning this repo, make sure to update submodules:
+Run commands from the repository root unless stated otherwise. Replace `/path/to/openpi` with your checkout path and set `PROJECT_ROOT` in each terminal:
 
 ```bash
-git clone --recurse-submodules git@github.com:Physical-Intelligence/openpi.git
-
-# Or if you already cloned the repo:
-git submodule update --init --recursive
+cd /path/to/openpi
+export PROJECT_ROOT="$PWD"
 ```
 
-We use [uv](https://docs.astral.sh/uv/) to manage Python dependencies. See the [uv installation instructions](https://docs.astral.sh/uv/getting-started/installation/) to set it up. Once uv is installed, run the following to set up the environment:
+### 1.1 openpi: Official Installation
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and Git LFS, then follow the [official openpi installation instructions](https://github.com/Physical-Intelligence/openpi#installation):
 
 ```bash
+git submodule update --init --recursive
 GIT_LFS_SKIP_SMUDGE=1 uv sync
 GIT_LFS_SKIP_SMUDGE=1 uv pip install -e .
+.venv/bin/python -c 'import jax; print(jax.devices())'
 ```
 
-NOTE: `GIT_LFS_SKIP_SMUDGE=1` is needed to pull LeRobot as a dependency.
+Both SO-101 and RoboTwin training configurations load base weights from `./pi05_base/params`. Download them if needed:
 
-**Docker**: As an alternative to uv installation, we provide instructions for installing openpi using Docker. If you encounter issues with your system setup, consider using Docker to simplify installation. See [Docker Setup](docs/docker.md) for more details.
-
-
-
-
-## Model Checkpoints
-
-### Base Models
-We provide multiple base VLA model checkpoints. These checkpoints have been pre-trained on 10k+ hours of robot data, and can be used for fine-tuning.
-
-| Model        | Use Case    | Description                                                                                                 | Checkpoint Path                                |
-| ------------ | ----------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| $\pi_0$      | Fine-Tuning | Base [π₀ model](https://www.physicalintelligence.company/blog/pi0) for fine-tuning                | `gs://openpi-assets/checkpoints/pi0_base`      |
-| $\pi_0$-FAST | Fine-Tuning | Base autoregressive [π₀-FAST model](https://www.physicalintelligence.company/research/fast) for fine-tuning | `gs://openpi-assets/checkpoints/pi0_fast_base` |
-| $\pi_{0.5}$    | Fine-Tuning | Base [π₀.₅ model](https://www.physicalintelligence.company/blog/pi05) for fine-tuning    | `gs://openpi-assets/checkpoints/pi05_base`      |
-
-### Fine-Tuned Models
-We also provide "expert" checkpoints for various robot platforms and tasks. These models are fine-tuned from the base models above and intended to run directly on the target robot. These may or may not work on your particular robot. Since these checkpoints were fine-tuned on relatively small datasets collected with more widely available robots, such as ALOHA and the DROID Franka setup, they might not generalize to your particular setup, though we found some of these, especially the DROID checkpoint, to generalize quite broadly in practice.
-
-| Model                    | Use Case    | Description                                                                                                                                                                                              | Checkpoint Path                                       |
-| ------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| $\pi_0$-FAST-DROID       | Inference   | $\pi_0$-FAST model fine-tuned on the [DROID dataset](https://droid-dataset.github.io/): can perform a wide range of simple table-top manipulation tasks 0-shot in new scenes on the DROID robot platform | `gs://openpi-assets/checkpoints/pi0_fast_droid`       |
-| $\pi_0$-DROID            | Fine-Tuning | $\pi_0$ model fine-tuned on the [DROID dataset](https://droid-dataset.github.io/): faster inference than $\pi_0$-FAST-DROID, but may not follow language commands as well                                | `gs://openpi-assets/checkpoints/pi0_droid`            |
-| $\pi_0$-ALOHA-towel      | Inference   | $\pi_0$ model fine-tuned on internal [ALOHA](https://tonyzhaozh.github.io/aloha/) data: can fold diverse towels 0-shot on ALOHA robot platforms                                                          | `gs://openpi-assets/checkpoints/pi0_aloha_towel`      |
-| $\pi_0$-ALOHA-tupperware | Inference   | $\pi_0$ model fine-tuned on internal [ALOHA](https://tonyzhaozh.github.io/aloha/) data: can unpack food from a tupperware container                                                                                                             | `gs://openpi-assets/checkpoints/pi0_aloha_tupperware` |
-| $\pi_0$-ALOHA-pen-uncap  | Inference   | $\pi_0$ model fine-tuned on public [ALOHA](https://dit-policy.github.io/) data: can uncap a pen                                                                                                          | `gs://openpi-assets/checkpoints/pi0_aloha_pen_uncap`  |
-| $\pi_{0.5}$-LIBERO      | Inference   | $\pi_{0.5}$ model fine-tuned for the [LIBERO](https://libero-project.github.io/datasets) benchmark: gets state-of-the-art performance (see [LIBERO README](examples/libero/README.md)) | `gs://openpi-assets/checkpoints/pi05_libero`      |
-| $\pi_{0.5}$-DROID      | Inference / Fine-Tuning | $\pi_{0.5}$ model fine-tuned on the [DROID dataset](https://droid-dataset.github.io/) with [knowledge insulation](https://www.physicalintelligence.company/research/knowledge_insulation): fast inference and good language-following | `gs://openpi-assets/checkpoints/pi05_droid`      |
-
-
-By default, checkpoints are automatically downloaded from `gs://openpi-assets` and are cached in `~/.cache/openpi` when needed. You can overwrite the download path by setting the `OPENPI_DATA_HOME` environment variable.
-
-
-
-
-## Running Inference for a Pre-Trained Model
-
-Our pre-trained model checkpoints can be run with a few lines of code (here our $\pi_0$-FAST-DROID model):
-```python
-from openpi.training import config as _config
-from openpi.policies import policy_config
+```bash
+.venv/bin/python - <<'PY'
+from pathlib import Path
+import shutil
 from openpi.shared import download
-
-config = _config.get_config("pi05_droid")
-checkpoint_dir = download.maybe_download("gs://openpi-assets/checkpoints/pi05_droid")
-
-# Create a trained policy.
-policy = policy_config.create_trained_policy(config, checkpoint_dir)
-
-# Run inference on a dummy example.
-example = {
-    "observation/exterior_image_1_left": ...,
-    "observation/wrist_image_left": ...,
-    ...
-    "prompt": "pick up the fork"
-}
-action_chunk = policy.infer(example)["actions"]
+source = Path(download.maybe_download("gs://openpi-assets/checkpoints/pi05_base"))
+target = Path("pi05_base")
+if target.exists():
+    raise SystemExit("pi05_base already exists; check its params directory instead of overwriting it")
+shutil.copytree(source, target)
+PY
 ```
-You can also test this out in the [example notebook](examples/inference.ipynb).
 
-We provide detailed step-by-step examples for running inference of our pre-trained checkpoints on [DROID](examples/droid/README.md) and [ALOHA](examples/aloha_real/README.md) robots.
+LoRA checkpoints store only trainable parameters. Keep `pi05_base/params` available for deployment.
 
-**Remote Inference**: We provide [examples and code](docs/remote_inference.md) for running inference of our models **remotely**: the model can run on a different server and stream actions to the robot via a websocket connection. This makes it easy to use more powerful GPUs off-robot and keep robot and policy environments separate.
+### 1.2 SO-101: Separate LeRobot Environment
 
-**Test inference without a robot**: We provide a [script](examples/simple_client/README.md) for testing inference without a robot. This script will generate a random observation and run inference with the model. See [here](examples/simple_client/README.md) for more details.
+LeRobot is pinned to `huggingface/lerobot@145cc7ea53e5864bd5efec4e9bb70ee799e47bd8`, which supports leader feedback control.
 
-
-
-
-
-## Fine-Tuning Base Models on Your Own Data
-
-We will fine-tune the $\pi_{0.5}$ model on the [LIBERO dataset](https://libero-project.github.io/datasets) as a running example for how to fine-tune a base model on your own data. We will explain three steps:
-1. Convert your data to a LeRobot dataset (which we use for training)
-2. Defining training configs and running training
-3. Spinning up a policy server and running inference
-
-### 1. Convert your data to a LeRobot dataset
-
-We provide a minimal example script for converting LIBERO data to a LeRobot dataset in [`examples/libero/convert_libero_data_to_lerobot.py`](examples/libero/convert_libero_data_to_lerobot.py). You can easily modify it to convert your own data! You can download the raw LIBERO dataset from [here](https://huggingface.co/datasets/openvla/modified_libero_rlds), and run the script with:
+Install with Conda:
 
 ```bash
-uv run examples/libero/convert_libero_data_to_lerobot.py --data_dir /path/to/your/libero/data
+conda create -n so101_hil_lite python=3.12 -y
+conda activate so101_hil_lite
+python -m pip install -r so101_hil_lite/requirements.txt
+python -m pip check
 ```
 
-**Note:** If you just want to fine-tune on LIBERO, you can skip this step, because our LIBERO fine-tuning configs point to a pre-converted LIBERO dataset. This step is merely an example that you can adapt to your own data.
-
-### 2. Defining training configs and running training
-
-To fine-tune a base model on your own data, you need to define configs for data processing and training. We provide example configs with detailed comments for LIBERO below, which you can modify for your own dataset:
-
-- [`LiberoInputs` and `LiberoOutputs`](src/openpi/policies/libero_policy.py): Defines the data mapping from the LIBERO environment to the model and vice versa. Will be used for both, training and inference.
-- [`LeRobotLiberoDataConfig`](src/openpi/training/config.py): Defines how to process raw LIBERO data from LeRobot dataset for training.
-- [`TrainConfig`](src/openpi/training/config.py): Defines fine-tuning hyperparameters, data config, and weight loader.
-
-We provide example fine-tuning configs for [π₀](src/openpi/training/config.py), [π₀-FAST](src/openpi/training/config.py), and [π₀.₅](src/openpi/training/config.py) on LIBERO data.
-
-Before we can run training, we need to compute the normalization statistics for the training data. Run the script below with the name of your training config:
+After activating the SO-101 environment, set the client source path:
 
 ```bash
-uv run scripts/compute_norm_stats.py --config-name pi05_libero
+export PYTHONPATH="$PROJECT_ROOT/packages/openpi-client/src${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
-Now we can kick off training with the following command (the `--overwrite` flag is used to overwrite existing checkpoints if you rerun fine-tuning with the same config):
+### 1.3 RECAP Value-Model Environment
+
+Required only for RECAP. Keep the constraints file when installing to avoid TensorFlow/protobuf dependency conflicts:
 
 ```bash
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_libero --exp-name=my_experiment --overwrite
+conda create -n openpi-recap-value python=3.11 -y
+conda activate openpi-recap-value
+python -m pip install -r value_runtime/requirements.txt -c value_runtime/constraints-tested.txt
+python -m pip check
+python -c 'import jax; print(jax.devices())'
 ```
 
-The command will log training progress to the console and save checkpoints to the `checkpoints` directory. You can also monitor training progress on the Weights & Biases dashboard. For maximally using the GPU memory, set `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9` before running training -- this enables JAX to use up to 90% of the GPU memory (vs. the default of 75%).
-
-**Note:** We provide functionality for *reloading* normalization statistics for state / action normalization from pre-training. This can be beneficial if you are fine-tuning to a new task on a robot that was part of our pre-training mixture. For more details on how to reload normalization statistics, see the [norm_stats.md](docs/norm_stats.md) file.
-
-### 3. Spinning up a policy server and running inference
-
-Once training is complete, we can run inference by spinning up a policy server and then querying it from a LIBERO evaluation script. Launching a model server is easy (we use the checkpoint for iteration 20,000 for this example, modify as needed):
+Install `hf` using the [Hugging Face CLI documentation](https://huggingface.co/docs/huggingface_hub/guides/cli), then download the value-model initialization weights:
 
 ```bash
-uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi05_libero --policy.dir=checkpoints/pi05_libero/my_experiment/20000
+hf download ybpy/vlm_ckpt \
+  --include 'gemma-3-270m/step_00020000/*' --include 'tokenizer.model' \
+  --local-dir .openpi_cache/recap_value
 ```
 
-This will spin up a server that listens on port 8000 and waits for observations to be sent to it. We can then run an evaluation script (or robot runtime) that queries the server.
+<a id="so101"></a>
+## 2. SO-101 Hardware Post-Training and Deployment
 
-For running the LIBERO eval in particular, we provide (and recommend using) a Dockerized workflow that handles both the policy server and the evaluation script together. See the [LIBERO README](examples/libero/README.md) for more details.
+### 2.1 Assembly, Motor Setup, and Calibration
 
-If you want to embed a policy server call in your own robot runtime, we have a minimal example of how to do so in the [remote inference docs](docs/remote_inference.md).
+Follow the [official Seeed Studio SO-ARM100/SO-ARM101 guide](https://wiki.seeedstudio.com/lerobot_so100m_new/) for assembly, motor IDs, wiring, and calibration. Use the LeRobot version specified in Section 1.2.
 
-
-
-### More Examples
-
-We provide more examples for how to fine-tune and run inference with our models on the ALOHA platform in the following READMEs:
-- [ALOHA Simulator](examples/aloha_sim)
-- [ALOHA Real](examples/aloha_real)
-- [UR5](examples/ur5)
-
-## PyTorch Support
-
-openpi now provides PyTorch implementations of π₀ and π₀.₅ models alongside the original JAX versions! The PyTorch implementation has been validated on the LIBERO benchmark (both inference and finetuning). A few features are currently not supported (this may change in the future):
-
-- The π₀-FAST model
-- Mixed precision training
-- FSDP (fully-sharded data parallelism) training
-- LoRA (low-rank adaptation) training
-- EMA (exponential moving average) weights during training
-
-### Setup
-1. Make sure that you have the latest version of all dependencies installed: `uv sync`
-
-2. Double check that you have transformers 4.53.2 installed: `uv pip show transformers`
-
-3. Apply the transformers library patches:
-   ```bash
-   cp -r ./src/openpi/models_pytorch/transformers_replace/* .venv/lib/python3.11/site-packages/transformers/
-   ```
-
-This overwrites several files in the transformers library with necessary model changes: 1) supporting AdaRMS, 2) correctly controlling the precision of activations, and 3) allowing the KV cache to be used without being updated.
-
-**WARNING**: With the default uv link mode (hardlink), this will permanently affect the transformers library in your uv cache, meaning the changes will survive reinstallations of transformers and could even propagate to other projects that use transformers. To fully undo this operation, you must run `uv cache clean transformers`.
-
-### Converting JAX Models to PyTorch
-
-To convert a JAX model checkpoint to PyTorch format:
+Calibrate in the SO-101 environment, replacing ports and IDs with your device settings:
 
 ```bash
-uv run examples/convert_jax_model_to_pytorch.py \
-    --checkpoint_dir /path/to/jax/checkpoint \
-    --config_name <config name> \
-    --output_path /path/to/converted/pytorch/checkpoint
+conda activate so101_hil_lite
+lerobot-calibrate \
+  --robot.type=so101_follower --robot.port=/dev/ttyACM0 \
+  --robot.id=my_awesome_follower_arm
+
+lerobot-calibrate \
+  --teleop.type=so101_leader --teleop.port=/dev/ttyACM1 \
+  --teleop.id=my_awesome_leader_arm
+
+lerobot-teleoperate \
+  --robot.type=so101_follower --robot.port=/dev/ttyACM0 \
+  --robot.id=my_awesome_follower_arm \
+  --teleop.type=so101_leader --teleop.port=/dev/ttyACM1 \
+  --teleop.id=my_awesome_leader_arm
 ```
 
-### Running Inference with PyTorch
+Reuse the same calibration IDs for collection and deployment. Stable `/dev/serial/by-id/...` paths can replace numbered ports. Examples use camera `0` for the front view and `2` for the wrist view.
 
-The PyTorch implementation uses the same API as the JAX version - you only need to change the checkpoint path to point to the converted PyTorch model:
+### 2.2 Collect Demonstrations
 
-```python
-from openpi.training import config as _config
-from openpi.policies import policy_config
-from openpi.shared import download
-
-config = _config.get_config("pi05_droid")
-checkpoint_dir = "/path/to/converted/pytorch/checkpoint"
-
-# Create a trained policy (automatically detects PyTorch format)
-policy = policy_config.create_trained_policy(config, checkpoint_dir)
-
-# Run inference (same API as JAX)
-action_chunk = policy.infer(example)["actions"]
-```
-
-### Policy Server with PyTorch
-
-The policy server works identically with PyTorch models - just point to the converted checkpoint directory:
+Run the official `lerobot-record` in the SO-101 environment for human teleoperation; no policy server is required:
 
 ```bash
-uv run scripts/serve_policy.py policy:checkpoint \
-    --policy.config=pi05_droid \
-    --policy.dir=/path/to/converted/pytorch/checkpoint
+lerobot-record \
+  --robot.type=so101_follower --robot.port=/dev/ttyACM0 \
+  --robot.id=my_awesome_follower_arm \
+  --robot.cameras='{"front":{"type":"opencv","index_or_path":0,"width":640,"height":480,"fps":30,"fourcc":"MJPG"},"wrist":{"type":"opencv","index_or_path":2,"width":640,"height":480,"fps":30,"fourcc":"MJPG"}}' \
+  --teleop.type=so101_leader --teleop.port=/dev/ttyACM1 \
+  --teleop.id=my_awesome_leader_arm \
+  --dataset.root="$PROJECT_ROOT/raw_data/so101_sft" \
+  --dataset.repo_id=local/so101_sft_raw \
+  --dataset.single_task="Grab the toy into the box" \
+  --dataset.num_episodes=50 --dataset.episode_time_s=40 \
+  --dataset.reset_time_s=10 --dataset.push_to_hub=false --display_data=false
 ```
 
-### Finetuning with PyTorch
+Adjust the episode count as needed and keep demonstrations consistent with the task instruction.
 
-To finetune a model in PyTorch:
+### 2.3 Convert to LeRobot v2.1
 
-1. Convert the JAX base model to PyTorch format:
-   ```bash
-   uv run examples/convert_jax_model_to_pytorch.py \
-       --config_name <config name> \
-       --checkpoint_dir /path/to/jax/base/model \
-       --output_path /path/to/pytorch/base/model
-   ```
-
-2. Specify the converted PyTorch model path in your config using `pytorch_weight_path`
-
-3. Launch training using one of these modes:
+Convert using the openpi environment:
 
 ```bash
-# Single GPU training:
-uv run scripts/train_pytorch.py <config_name> --exp_name <run_name> --save_interval <interval>
-
-# Example:
-uv run scripts/train_pytorch.py debug --exp_name pytorch_test
-uv run scripts/train_pytorch.py debug --exp_name pytorch_test --resume  # Resume from latest checkpoint
-
-# Multi-GPU training (single node):
-uv run torchrun --standalone --nnodes=1 --nproc_per_node=<num_gpus> scripts/train_pytorch.py <config_name> --exp_name <run_name>
-
-# Example:
-uv run torchrun --standalone --nnodes=1 --nproc_per_node=2 scripts/train_pytorch.py pi0_aloha_sim --exp_name pytorch_ddp_test
-uv run torchrun --standalone --nnodes=1 --nproc_per_node=2 scripts/train_pytorch.py pi0_aloha_sim --exp_name pytorch_ddp_test --resume
-
-# Multi-Node Training:
-uv run torchrun \
-    --nnodes=<num_nodes> \
-    --nproc_per_node=<gpus_per_node> \
-    --node_rank=<rank_of_node> \
-    --master_addr=<master_ip> \
-    --master_port=<port> \
-    scripts/train_pytorch.py <config_name> --exp_name=<run_name> --save_interval <interval>
+export HF_LEROBOT_HOME="$PROJECT_ROOT/converted_lerobot"
+.venv/bin/python scripts/convert_so101_v3_to_v21.py \
+  --source="$PROJECT_ROOT/raw_data/so101_sft" \
+  --repo-id=local/so101_train_dataset
 ```
 
-### Precision Settings
+Use a new output directory. Skip conversion if your v2.1 dataset already matches the configuration.
 
-JAX and PyTorch implementations handle precision as follows:
+### 2.4 Normalization Statistics and LoRA Post-Training
 
-**JAX:**
-1. Inference: most weights and computations in bfloat16, with a few computations in float32 for stability
-2. Training: defaults to mixed precision: weights and gradients in float32, (most) activations and computations in bfloat16. You can change to full float32 training by setting `dtype` to float32 in the config.
+```bash
+export HF_LEROBOT_HOME="$PROJECT_ROOT/converted_lerobot"
+.venv/bin/python scripts/compute_norm_stats.py \
+  --config-name=pi05_so101_lora_finetune
 
-**PyTorch:**
-1. Inference: matches JAX -- most weights and computations in bfloat16, with a few weights converted to float32 for stability
-2. Training: supports either full bfloat16 (default) or full float32. You can change it by setting `pytorch_training_precision` in the config. bfloat16 uses less memory but exhibits higher losses compared to float32. Mixed precision is not yet supported.
+.venv/bin/python scripts/train.py pi05_so101_lora_finetune \
+  --exp-name=so101_run_1 --num-train-steps=30000 --no-wandb-enabled
+```
 
-With torch.compile, inference speed is comparable between JAX and PyTorch.
+Configuration: front/wrist images, 6-dimensional state/action, 16-step action chunks, and batch size 2.
 
-## Troubleshooting
+The final checkpoint in this example is `29999`. Update deployment paths when changing the experiment name or training steps.
 
-We will collect common issues and their solutions here. If you encounter an issue, please check here first. If you can't find a solution, please file an issue on the repo (see [here](CONTRIBUTING.md) for guidelines).
+### 2.5 Standard Inference
 
-| Issue                                     | Resolution                                                                                                                                                                                   |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `uv sync` fails with dependency conflicts | Try removing the virtual environment directory (`rm -rf .venv`) and running `uv sync` again. If issues persist, check that you have the latest version of `uv` installed (`uv self update`). |
-| Training runs out of GPU memory           | Make sure you set `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9` (or higher) before running training to allow JAX to use more GPU memory. You can also use `--fsdp-devices <n>` where `<n>` is your number of GPUs, to enable [fully-sharded data parallelism](https://engineering.fb.com/2021/07/15/open-source/fsdp/), which reduces memory usage in exchange for slower training (the amount of slowdown depends on your particular setup). If you are still running out of memory, you may want to consider disabling EMA.        |
-| Policy server connection errors           | Check that the server is running and listening on the expected port. Verify network connectivity and firewall settings between client and server.                                            |
-| Missing norm stats error when training    | Run `scripts/compute_norm_stats.py` with your config name before starting training.                                                                                                          |
-| Dataset download fails                    | Check your internet connection. For HuggingFace datasets, ensure you're logged in (`huggingface-cli login`).                                                                                 |
-| CUDA/GPU errors                           | Verify NVIDIA drivers are installed correctly. For Docker, ensure nvidia-container-toolkit is installed. Check GPU compatibility. You do NOT need CUDA libraries installed at a system level --- they will be installed via uv. You may even want to try *uninstalling* system CUDA libraries if you run into CUDA issues, since system libraries can sometimes cause conflicts. |
-| Import errors when running examples       | Make sure you've installed all dependencies with `uv sync`. Some examples may have additional requirements listed in their READMEs.                    |
-| Action dimensions mismatch                | Verify your data processing transforms match the expected input/output dimensions of your robot. Check the action space definitions in your policy classes.                                  |
-| Diverging training loss                            | Check the `q01`, `q99`, and `std` values in `norm_stats.json` for your dataset. Certain dimensions that are rarely used can end up with very small `q01`, `q99`, or `std` values, leading to huge states and actions after normalization. You can manually adjust the norm stats as a workaround. |
+Terminal 1: start the policy server in the openpi environment:
+
+```bash
+.venv/bin/python scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_so101_lora_finetune \
+  --policy.dir=checkpoints/pi05_so101_lora_finetune/so101_run_1/29999 \
+  --default-prompt="Grab the toy into the box" --port=8000
+```
+
+Terminal 2: activate the SO-101 environment and set `PYTHONPATH` as in Section 1.2. Omit `--execute` to check observations and inference without sending motor commands:
+
+```bash
+python scripts/eval_so101.py \
+  --port-arm=/dev/ttyACM0 --robot-id=my_awesome_follower_arm \
+  --front-camera=0 --wrist-camera=2 --host=127.0.0.1 --server-port=8000 \
+  --prompt="Grab the toy into the box" \
+  --duration=40 --fps=30 --chunk-exec=8 --execute
+```
+
+### 2.6 RTC Inference
+
+Use the same policy server. The RTC client overlaps inference with execution and uses prefix guidance to connect action chunks.
+
+```bash
+python scripts/eval_so101.py \
+  --port-arm=/dev/ttyACM0 --robot-id=my_awesome_follower_arm \
+  --front-camera=0 --wrist-camera=2 --host=127.0.0.1 --server-port=8000 \
+  --prompt="Grab the toy into the box" --duration=40 --fps=30 \
+  --rtc --rtc-inference-delay=6 --rtc-execution-horizon=8 \
+  --rtc-max-guidance-weight=10 --execute
+```
+
+
+<a id="robotwin"></a>
+## 3. RoboTwin 2.0 Post-Training and Simulation
+
+### 3.1 Install the Simulation Environment
+
+Follow the [official RoboTwin installation guide](https://robotwin-platform.github.io/doc/usage/robotwin-install.html) to prepare Vulkan, GPU drivers, ffmpeg, and simulation assets:
+
+```bash
+git clone --recurse-submodules https://github.com/RoboTwin-Platform/RoboTwin.git "$PROJECT_ROOT/../RoboTwin"
+conda create -n RoboTwin python=3.10 -y
+conda activate RoboTwin
+cd "$PROJECT_ROOT/../RoboTwin"
+bash scripts/_install.sh
+bash scripts/_download_assets.sh
+cd "$PROJECT_ROOT"
+```
+
+Skip installation if the environment is already available. Evaluation still requires the RoboTwin checkout and assets.
+
+### 3.2 Prepare Training Data
+
+Training uses **LeRobot v2.1** data. Choose either of the following methods.
+
+#### Option A: Download the Official v2.1 Dataset
+
+Download the official [LeRobot v2.1 dataset](https://huggingface.co/datasets/TianxingChen/RoboTwin2.0/tree/main/lerobot_dataset) directly, without HDF5 conversion. The archive is approximately 2.40 GB:
+
+```bash
+hf download TianxingChen/RoboTwin2.0 \
+  --repo-type=dataset \
+  --include 'lerobot_dataset/RoboTwin_lerobot_v21.zip' \
+  --local-dir "$PROJECT_ROOT/datasets/robotwin_download"
+
+unzip "$PROJECT_ROOT/datasets/robotwin_download/lerobot_dataset/RoboTwin_lerobot_v21.zip" \
+  -d "$PROJECT_ROOT/datasets/robotwin"
+find "$PROJECT_ROOT/datasets/robotwin" -path '*/meta/info.json'
+```
+
+Set `HF_LEROBOT_HOME / repo_id` to the extracted dataset root containing `meta/`, `data/`, and `videos/`. For `datasets/robotwin/RoboTwin_lerobot_v21`, set `HF_LEROBOT_HOME="$PROJECT_ROOT/datasets/robotwin"` and change the training configuration’s `repo_id` to `RoboTwin_lerobot_v21`. Use the same path for statistics and training.
+
+#### Option B: Collect and Convert Using Official Tools
+
+Run the official collection script in the RoboTwin environment. This example uses `adjust_bottle`, `demo_clean`, and GPU 0. The task configuration controls episode count, cameras, and robot settings:
+
+```bash
+conda activate RoboTwin
+cd "$PROJECT_ROOT/../RoboTwin"
+bash collect_data.sh adjust_bottle demo_clean 0
+```
+
+HDF5 trajectories are saved under `data/<task_config>/<task_name>/<embodiment>/data/`. Convert the selected task with the official v2.1 converter:
+
+```bash
+# Run in a separate environment with the required LeRobot v2.1 conversion dependencies.
+cd "$PROJECT_ROOT/../RoboTwin"
+export HF_LEROBOT_HOME="$PROJECT_ROOT"
+python XPolicyLab/scripts/transform_lerobot_v21_format.py \
+  "demo_clean.adjust_bottle.aloha_agilex" \
+  --repo_id RoboTwin_lerobot_v21_50ep \
+  --max_episode 50
+cd "$PROJECT_ROOT"
+```
+
+Configure conversion dependencies separately according to your RoboTwin version. `--max_episode 50` limits each matching task to at most 50 episodes; it does not create missing episodes.
+
+The following examples use `$PROJECT_ROOT/RoboTwin_lerobot_v21_50ep`. The `50ep` configuration name does not automatically subset data. Update `repo_id` and `HF_LEROBOT_HOME` when using the full official dataset. The policy uses three camera views and 14-dimensional dual-arm state/action.
+
+### 3.3 Normalization Statistics and Training
+
+Run from the project root using the openpi environment. These commands target the 50-episode subset; for the full official dataset, replace `HF_LEROBOT_HOME` with the path configured in Section 3.2:
+
+```bash
+export HF_LEROBOT_HOME="$PROJECT_ROOT"
+.venv/bin/python scripts/compute_norm_stats.py \
+  --config-name=pi05_robotwin_50ep_lora_finetune
+
+.venv/bin/python scripts/train.py pi05_robotwin_50ep_lora_finetune \
+  --exp-name=robotwin_50ep_run1 --num-train-steps=30000 --no-wandb-enabled
+```
+
+Task instructions are read from the dataset. Defaults are batch size 2 and horizon 16. For a short test, use 1,000 steps and checkpoint `999`.
+
+### 3.4 Policy Serving and Simulation Evaluation
+
+Terminal 1:
+
+```bash
+.venv/bin/python scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_robotwin_50ep_lora_finetune \
+  --policy.dir=checkpoints/pi05_robotwin_50ep_lora_finetune/robotwin_50ep_run1/29999 \
+  --port=8000
+```
+
+Terminal 2: activate `RoboTwin` and run evaluation. Add `--validate-only` to check the configuration without starting simulation:
+
+```bash
+conda activate RoboTwin
+bash robotwin_eval/eval_openpi.sh \
+  --robotwin-root="$PROJECT_ROOT/../RoboTwin" \
+  --task-name=adjust_bottle --task-config=demo_clean \
+  --host=127.0.0.1 --port=8000 --episodes=5 --exec-steps=8
+```
+
+Match the task to your training data. Videos are saved by default (ffmpeg required); results are stored under `eval_result/robotwin_openpi/`.
+
+<a id="recap"></a>
+## 4. SO-101 RECAP: Collection, Value Training, and Policy Iteration
+
+Workflow: **SFT initialization → rollouts → cumulative data pool → value training → advantage labeling → conditioned policy training → deployment and next-round collection**. The value model runs offline only.
+
+### 4.1 Deploy the Initial Policy and Collect Rollouts
+
+Use the SFT server from Section 2.5 in Terminal 1. In Terminal 2, activate the SO-101 environment:
+
+```bash
+conda activate so101_hil_lite
+python so101_hil_lite/record.py \
+  --follower-port=/dev/ttyACM0 --follower-id=my_awesome_follower_arm \
+  --leader-port=/dev/ttyACM1 --leader-id=my_awesome_leader_arm \
+  --front-camera=0 --wrist-camera=2 --host=127.0.0.1 --port=8000 \
+  --policy-id=so101_run_1_29999 --prompt="Grab the toy into the box" \
+  --root=so101_hil_lite/data/toy_round1 --repo-id=local/so101_toy_round1 \
+  --episodes=20 --duration=40 --fps=30
+```
+
+Add `--dry-run` to check connectivity and inference first. During collection:
+
+1. Press Enter to enable alignment. Move the leader so the follower tracks it to the initial pose.
+2. Arrange the objects and press Enter again to start policy execution and recording. The leader follows the policy during autonomous execution.
+3. Press `i` to pause; both arms hold position. Support the leader, then press Enter to take manual control.
+4. After correcting the motion, press `i` to check alignment, clear the action cache, and return control to the policy.
+5. Press `s` for success or `f` for failure. Press `q` to mark the episode as aborted and exit. Select an outcome explicitly after a timeout.
+
+Reset the scene manually between episodes. Per-frame intervention flags are stored in the dataset, and episode outcomes in `outcomes.jsonl`. Conversion excludes paused frames and aborted episodes. Include intervention-free success/failure rollouts for training and threshold estimation. HIL uses synchronous inference, without RTC.
+
+### 4.2 Validate, Set Reward Scales, and Split Data
+
+In the SO-101 environment:
+
+```bash
+python so101_hil_lite/check_dataset.py so101_hil_lite/data/toy_round1
+python so101_hil_lite/convert_to_recap.py \
+  so101_hil_lite/data/toy_round1 datasets/toy/prepared/round1 \
+  --fps=30 --task-max-steps=1201 --round-id=1 \
+  --validation-episodes 16 17 18 19
+```
+
+Adjust validation IDs to your episodes. This example allows 1201 frames: nonterminal reward -1, successful terminal reward 0, failed terminal reward -1201, and normalization scale 2401. Reuse the fixed scales in the first round’s `recap_manifest.json` for later rounds.
+
+### 4.3 Import Demonstrations and Build the Cumulative Pool
+
+If the demonstrations from Section 2 cover the same toy task and are all successful:
+
+```bash
+python so101_hil_lite/merge_recap_datasets.py prepare-demonstrations \
+  converted_lerobot/local/so101_train_dataset datasets/toy/prepared/demos \
+  --task-scales-json=datasets/toy/prepared/round1/meta/recap_manifest.json \
+  --policy-id=human_demo --assume-success
+
+python so101_hil_lite/merge_recap_datasets.py merge \
+  datasets/toy/prepared/demos datasets/toy/prepared/round1 \
+  --output=datasets/toy/pools/round1
+```
+
+Use `--assume-success` only for entirely successful demonstrations; otherwise provide `--outcomes-json`. To omit demonstrations, pass only round1 to the merge command. All output directories must be new.
+
+### 4.4 Train the Value Model
+
+Stop the GPU policy server and run in the value-model environment:
+
+```bash
+conda activate openpi-recap-value
+python value_runtime/train.py \
+  --data=datasets/toy/pools/round1 \
+  --checkpoint=.openpi_cache/recap_value/gemma-3-270m/step_00020000 \
+  --tokenizer=.openpi_cache/recap_value/tokenizer.model \
+  --output=checkpoints/recap_value/toy_round1 \
+  --freeze-mode=all_backbones --batch-size=1 --steps=5000 \
+  --val-interval=1000 --save-interval=1000
+```
+
+The SigLIP + Gemma3-270M value model takes images, task instructions, and state as input and predicts a value distribution. `all_backbones` freezes the backbones and trains only fusion layers and the value head.
+
+### 4.5 Compute N-Step Advantages and Labels
+
+```bash
+python value_runtime/label_advantage.py \
+  --data=datasets/toy/pools/round1 \
+  --checkpoint=checkpoints/recap_value/toy_round1/step_00005000 \
+  --tokenizer=.openpi_cache/recap_value/tokenizer.model \
+  --output=datasets/toy/labeled/round1 \
+  --threshold-round=1 --lookahead=50 --positive-ratio=0.4 --batch-size=2
+```
+
+At 30 Hz, `N=50` spans approximately 1.67 seconds. Thresholds are estimated using only complete, intervention-free training rollouts from this round. Human frames remain positive, and validation frames remain none. Labels are written to a new dataset copy.
+
+### 4.6 Advantage-Conditioned LoRA Training
+
+Use the openpi environment and register this round’s dataset under a separate data parent directory:
+
+```bash
+export HF_LEROBOT_HOME="$PROJECT_ROOT/datasets/toy/policy_round1"
+mkdir -p "$HF_LEROBOT_HOME/local"
+ln -s "$PROJECT_ROOT/datasets/toy/labeled/round1" \
+  "$HF_LEROBOT_HOME/local/so101_stack_recap_labeled_v21"
+
+.venv/bin/python scripts/compute_norm_stats.py \
+  --config-name=pi05_so101_recap_lora_relabeled
+
+.venv/bin/python scripts/train.py pi05_so101_recap_lora_relabeled \
+  --data.default-prompt="Grab the toy into the box" \
+  --exp-name=toy_recap_round1 --num-train-steps=10000 --no-wandb-enabled
+```
+
+Keep the configured dataset identifier `so101_stack_recap_labeled_v21` and override the task instruction in the command. Each round starts from the fixed SFT seed `so101_run_1/29999`, not the previous adapter or `--resume`. Retain both the base weights and SFT seed. If changing the seed, update both training and inference configurations.
+
+### 4.7 Deploy the Updated Policy
+
+Terminal 1:
+
+```bash
+.venv/bin/python scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_so101_recap_lora_infer \
+  --policy.dir=checkpoints/pi05_so101_recap_lora_relabeled/toy_recap_round1/9999 \
+  --default-prompt="Grab the toy into the box" --port=8000
+```
+
+Terminal 2: collect the next round in the SO-101 environment with the positive condition:
+
+```bash
+conda activate so101_hil_lite
+python so101_hil_lite/record.py \
+  --follower-port=/dev/ttyACM0 --follower-id=my_awesome_follower_arm \
+  --leader-port=/dev/ttyACM1 --leader-id=my_awesome_leader_arm \
+  --front-camera=0 --wrist-camera=2 --host=127.0.0.1 --port=8000 \
+  --policy-id=toy_recap_round1_9999 --prompt="Grab the toy into the box" \
+  --advantage=positive \
+  --root=so101_hil_lite/data/toy_round2 --repo-id=local/so101_toy_round2 \
+  --episodes=20 --duration=40 --fps=30
+```
+
+Do not intervene during autonomous evaluation; corrections are allowed during training collection. Deploy RECAP with `record.py --advantage=positive`; the standard/RTC client does not expose an advantage-condition argument.
+
+### 4.8 Continue to the Next Round
+
+Convert new data in the SO-101 environment, reusing first-round scales and retaining the historical pool:
+
+```bash
+python so101_hil_lite/convert_to_recap.py \
+  so101_hil_lite/data/toy_round2 datasets/toy/prepared/round2 \
+  --task-scales-json=datasets/toy/prepared/round1/meta/recap_manifest.json \
+  --round-id=2 --validation-episodes 16 17 18 19
+
+python so101_hil_lite/merge_recap_datasets.py merge \
+  datasets/toy/pools/round1 datasets/toy/prepared/round2 \
+  --output=datasets/toy/pools/round2
+```
+
+Repeat Sections 4.4–4.7 with round2 paths and experiment names, set `--threshold-round=2`, and recompute normalization statistics. Both the value model and policy reuse their respective fixed initializations. Pool1 already contains historical data; do not merge its constituent datasets again.

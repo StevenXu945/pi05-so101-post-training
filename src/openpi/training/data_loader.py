@@ -138,8 +138,13 @@ def create_torch_dataset(
         return FakeDataset(model_config, num_samples=1024)
 
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+    recap_kwargs = {}
+    if data_config.recap_split is not None:
+        from openpi.recap.data_manifest import split_episodes
+        recap_kwargs["episodes"] = split_episodes(dataset_meta.root, data_config.recap_split)
     dataset = lerobot_dataset.LeRobotDataset(
         data_config.repo_id,
+        **recap_kwargs,
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
@@ -241,6 +246,10 @@ def create_data_loader(
     """
     data_config = config.data.create(config.assets_dirs, config.model)
     logging.info(f"data_config: {data_config}")
+    if data_config.recap_split is not None and jax.process_index() == 0:
+        from openpi.recap.data_manifest import record_policy_run
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(data_config.repo_id)
+        record_policy_run(config, dataset_meta.root)
 
     if data_config.rlds_data_dir is not None:
         return create_rlds_data_loader(

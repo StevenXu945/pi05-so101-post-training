@@ -29,14 +29,18 @@ class Pi0Config(_model.BaseModelConfig):
     # - the state input is part of the discrete language tokens rather than a continuous input that is part of the suffix
     # - the action expert uses adaRMSNorm to inject the flow matching timestep
     pi05: bool = False
+    recap: bool = False
+    recap_time_weighting: bool = True
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
     discrete_state_input: bool = None  # type: ignore
 
     pytorch_compile_mode: str | None = "max-autotune"
 
     def __post_init__(self):
+        if self.recap and not self.pi05:
+            raise ValueError("This RECAP adaptation supports pi05 policies only")
         if self.max_token_len is None:
-            object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
+            object.__setattr__(self, "max_token_len", (224 if self.recap else 200) if self.pi05 else (72 if self.recap else 48))
         if self.discrete_state_input is None:
             object.__setattr__(self, "discrete_state_input", self.pi05)
         if self.pytorch_compile_mode is not None:
@@ -58,6 +62,9 @@ class Pi0Config(_model.BaseModelConfig):
     def create(self, rng: at.KeyArrayLike) -> "Pi0":
         from openpi.models.pi0 import Pi0
 
+        if self.recap:
+            from openpi.recap.policy_model import RecapPi0
+            return RecapPi0(self, rngs=nnx.Rngs(rng))
         return Pi0(self, rngs=nnx.Rngs(rng))
 
     @override

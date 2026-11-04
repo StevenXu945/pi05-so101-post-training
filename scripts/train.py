@@ -214,6 +214,7 @@ def main(config: _config.TrainConfig):
         keep_period=config.keep_period,
         overwrite=config.overwrite,
         resume=config.resume,
+        save_concurrent_gb=config.checkpoint_save_concurrent_gb,
     )
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
 
@@ -233,12 +234,19 @@ def main(config: _config.TrainConfig):
     ]
     wandb.log({"camera_views": images_to_log}, step=0)
 
-    train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
+    train_state, train_state_sharding = init_train_state(
+        config, init_rng, mesh, resume=resuming and not config.checkpoint_trainable_only
+    )
     jax.block_until_ready(train_state)
     logging.info(f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}")
 
     if resuming:
-        train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
+        train_state = _checkpoints.restore_state(
+            checkpoint_manager,
+            train_state,
+            data_loader,
+            trainable_filter=config.trainable_filter if config.checkpoint_trainable_only else None,
+        )
 
     ptrain_step = jax.jit(
         functools.partial(train_step, config),
@@ -270,7 +278,13 @@ def main(config: _config.TrainConfig):
         batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
-            _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+            _checkpoints.save_state(
+                checkpoint_manager,
+                train_state,
+                data_loader,
+                step,
+                trainable_filter=config.trainable_filter if config.checkpoint_trainable_only else None,
+            )
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()

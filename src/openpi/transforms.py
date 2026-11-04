@@ -248,6 +248,8 @@ class AbsoluteActions(DataTransformFn):
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
     discrete_state_input: bool = False
+    recap: bool = False
+    adv_dropout_prob: float = 0.0
 
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
@@ -262,7 +264,16 @@ class TokenizePrompt(DataTransformFn):
         if not isinstance(prompt, str):
             prompt = prompt.item()
 
-        tokens, token_masks = self.tokenizer.tokenize(prompt, state)
+        advantage = data.pop("adv_ind", None)
+        if self.recap:
+            if advantage is None:
+                raise ValueError("adv_ind is required for RECAP")
+            if not isinstance(advantage, str):
+                advantage = np.asarray(advantage).item()
+            tokens, token_masks = self.tokenizer.tokenize(
+                prompt, state, adv_ind=advantage, adv_dropout_prob=self.adv_dropout_prob)
+        else:
+            tokens, token_masks = self.tokenizer.tokenize(prompt, state)
         return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
 
 

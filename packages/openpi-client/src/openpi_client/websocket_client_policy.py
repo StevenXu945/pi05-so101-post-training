@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 from typing import Dict, Optional, Tuple
 
@@ -24,6 +25,8 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
             self._uri += f":{port}"
         self._packer = msgpack_numpy.Packer()
         self._api_key = api_key
+        self._infer_lock = threading.Lock()
+        self._closed = False
         self._ws, self._server_metadata = self._wait_for_server()
 
     def get_server_metadata(self) -> Dict:
@@ -45,13 +48,22 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
 
     @override
     def infer(self, obs: Dict) -> Dict:  # noqa: UP006
-        data = self._packer.pack(obs)
-        self._ws.send(data)
-        response = self._ws.recv()
+        with self._infer_lock:
+            if self._closed:
+                raise RuntimeError("Policy websocket is closed")
+            data = self._packer.pack(obs)
+            self._ws.send(data)
+            response = self._ws.recv()
         if isinstance(response, str):
             # we're expecting bytes; if the server sends a string, it's an error.
             raise RuntimeError(f"Error in inference server:\n{response}")
         return msgpack_numpy.unpackb(response)
+
+    def close(self) -> None:
+        """Close the socket, including when a worker is waiting for a reply."""
+        if not self._closed:
+            self._closed = True
+            self._ws.close()
 
     @override
     def reset(self) -> None:

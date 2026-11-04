@@ -1,6 +1,7 @@
 import logging
 import os
 import pathlib
+import flax.traverse_util
 from typing import Any
 
 import jax.numpy as jnp
@@ -10,6 +11,7 @@ import openpi.policies.policy as _policy
 import openpi.shared.download as download
 from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
+from openpi.training import weight_loaders as _weight_loaders
 import openpi.transforms as transforms
 
 
@@ -54,7 +56,17 @@ def create_trained_policy(
         model = train_config.model.load_pytorch(train_config, weight_path)
         model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
     else:
-        model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
+        params = _model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16)
+        if train_config.checkpoint_trainable_only:
+            if isinstance(train_config.weight_loader, _weight_loaders.LayeredCheckpointWeightLoader):
+                base_params = train_config.weight_loader.load_frozen_base(dtype=jnp.bfloat16)
+            else:
+                base_path = download.maybe_download(train_config.weight_loader.params_path)
+                base_params = _model.restore_params(base_path, dtype=jnp.bfloat16)
+            flat_params = flax.traverse_util.flatten_dict(base_params)
+            flat_params.update(flax.traverse_util.flatten_dict(params))
+            params = flax.traverse_util.unflatten_dict(flat_params)
+        model = train_config.model.load(params)
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     if norm_stats is None:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure

@@ -8,6 +8,7 @@ from typing import Protocol
 
 from etils import epath
 import jax
+from flax import nnx
 import orbax.checkpoint as ocp
 import orbax.checkpoint.future as future
 
@@ -18,7 +19,12 @@ import openpi.training.utils as training_utils
 
 
 def initialize_checkpoint_dir(
-    checkpoint_dir: epath.Path | str, *, keep_period: int | None, overwrite: bool, resume: bool
+    checkpoint_dir: epath.Path | str,
+    *,
+    keep_period: int | None,
+    overwrite: bool,
+    resume: bool,
+    save_concurrent_gb: int | None = None,
 ) -> tuple[ocp.CheckpointManager, bool]:
     checkpoint_dir = epath.Path(checkpoint_dir).resolve()
     resuming = False
@@ -41,8 +47,8 @@ def initialize_checkpoint_dir(
         checkpoint_dir,
         item_handlers={
             "assets": CallbackHandler(),
-            "train_state": ocp.PyTreeCheckpointHandler(),
-            "params": ocp.PyTreeCheckpointHandler(),
+            "train_state": ocp.PyTreeCheckpointHandler(save_concurrent_gb=save_concurrent_gb),
+            "params": ocp.PyTreeCheckpointHandler(save_concurrent_gb=save_concurrent_gb),
         },
         options=ocp.CheckpointManagerOptions(
             max_to_keep=1,
@@ -67,6 +73,8 @@ def save_state(
     state: training_utils.TrainState,
     data_loader: _data_loader.DataLoader,
     step: int,
+    *,
+    trainable_filter: nnx.filterlib.Filter | None = None,
 ):
     def save_assets(directory: epath.Path):
         # Save the normalization stats.
@@ -78,6 +86,8 @@ def save_state(
     # Split params that can be used for inference into a separate item.
     with at.disable_typechecking():
         train_state, params = _split_params(state)
+        if trainable_filter is not None:
+            params = params.filter(trainable_filter)
     items = {
         "assets": save_assets,
         "train_state": train_state,
@@ -91,12 +101,16 @@ def restore_state(
     state: training_utils.TrainState,
     data_loader: _data_loader.DataLoader,
     step: int | None = None,
+    *,
+    trainable_filter: nnx.filterlib.Filter | None = None,
 ) -> training_utils.TrainState:
     del data_loader
 
     with at.disable_typechecking():
         # Split params that can be used for inference into a separate item.
         train_state, params = _split_params(state)
+        if trainable_filter is not None:
+            params = params.filter(trainable_filter)
         restored = checkpoint_manager.restore(
             step,
             items={
@@ -104,6 +118,11 @@ def restore_state(
                 "params": {"params": params},
             },
         )
+    if trainable_filter is not None:
+        # The initialized state contains the frozen base weights.
+        frozen_params = state.params.filter(nnx.Not(trainable_filter))
+        restored_params = nnx.State.merge(frozen_params, restored["params"]["params"])
+        return dataclasses.replace(restored["train_state"], params=restored_params)
     return _merge_params(restored["train_state"], restored["params"])
 
 

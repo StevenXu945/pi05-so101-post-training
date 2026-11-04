@@ -15,6 +15,7 @@ from typing_extensions import override
 
 from openpi import transforms as _transforms
 from openpi.models import model as _model
+from openpi.models import pi0 as _pi0
 from openpi.shared import array_typing as at
 from openpi.shared import nnx_utils
 
@@ -68,7 +69,47 @@ class Policy(BasePolicy):
     def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
+        rtc = inputs.pop("_rtc", None)
+        rtc_actions = None
+        if rtc is not None:
+            if not isinstance(rtc, dict):
+                raise ValueError("RTC request must be a dictionary")
+            if rtc.get("enabled", False):
+                if self._is_pytorch_model:
+                    raise NotImplementedError("RTC guidance is supported only by the JAX Pi0/Pi0.5 model")
+                if not isinstance(self._model, _pi0.Pi0):
+                    raise NotImplementedError("RTC guidance requires a JAX Pi0/Pi0.5 model")
+                raw_actions = rtc.get("prev_chunk_left_over")
+                if raw_actions is None:
+                    raise ValueError("RTC requires prev_chunk_left_over")
+                raw_actions = np.asarray(raw_actions)
+                if raw_actions.ndim != 2 or not 1 <= raw_actions.shape[0] <= self._model.action_horizon:
+                    raise ValueError("RTC prev_chunk_left_over must have shape (K, action_dim), with 1 <= K <= horizon")
+                if raw_actions.shape[1] != 6:
+                    raise ValueError("RTC SO-101 actions must have six joints")
+                if not np.issubdtype(raw_actions.dtype, np.number) or not np.isrealobj(raw_actions):
+                    raise ValueError("RTC actions must be real-valued")
+                if not np.isfinite(raw_actions).all():
+                    raise ValueError("RTC actions must be finite")
+                rtc_delay = rtc.get("inference_delay")
+                rtc_horizon = rtc.get("execution_horizon")
+                if type(rtc_delay) is not int or type(rtc_horizon) is not int:
+                    raise ValueError("RTC delay and execution horizon must be integers")
+                if not 0 <= rtc_delay <= rtc_horizon < self._model.action_horizon:
+                    raise ValueError("RTC requires 0 <= inference_delay <= execution_horizon < action horizon")
+                if rtc_delay > raw_actions.shape[0]:
+                    raise ValueError("RTC delay exceeds the previous chunk's remaining actions")
+                rtc_weight = float(rtc.get("max_guidance_weight", 10.0))
+                if not np.isfinite(rtc_weight) or rtc_weight <= 0:
+                    raise ValueError("RTC max_guidance_weight must be positive and finite")
+                # SO101Inputs, DeltaActions, Normalize and PadStatesAndActions must
+                # process the old absolute targets exactly like training actions.
+                inputs["actions"] = np.array(raw_actions, dtype=np.float32, copy=True)
         inputs = self._input_transform(inputs)
+        if isinstance(rtc, dict) and rtc.get("enabled", False):
+            rtc_actions = inputs.pop("actions", None)
+            if rtc_actions is None or np.asarray(rtc_actions).shape != (raw_actions.shape[0], self._model.action_dim):
+                raise ValueError("RTC action transforms did not produce model-space actions")
         if not self._is_pytorch_model:
             # Make a batch and convert to jax.Array.
             inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
@@ -86,6 +127,13 @@ class Policy(BasePolicy):
             if noise.ndim == 2:  # If noise is (action_horizon, action_dim), add batch dimension
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
             sample_kwargs["noise"] = noise
+        if rtc_actions is not None:
+            sample_kwargs.update(
+                prev_chunk_left_over=jnp.asarray(rtc_actions, dtype=jnp.float32)[None, ...],
+                inference_delay=rtc_delay,
+                execution_horizon=rtc_horizon,
+                max_guidance_weight=rtc_weight,
+            )
 
         observation = _model.Observation.from_dict(inputs)
         start_time = time.monotonic()
