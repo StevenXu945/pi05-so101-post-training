@@ -8,19 +8,25 @@ Built on [openpi](https://github.com/Physical-Intelligence/openpi), this project
 
 RECAP starts from task-specific SFT and does not reproduce the full official π*₀.₆ pretraining pipeline. Hardware examples use `Grab the toy into the box`; keep task instructions consistent across collection, training, and inference.
 
-## Demo Videos
+## Demo Highlights
 
-Replace “Coming soon” with video links or GitHub video attachments.
+**SO-101 Guided RTC**
 
-| Category | Demo | Video |
-|---|---|---|
-| SO-101 | Data collection: three synchronized views combined | Coming soon |
-| SO-101 | Standard inference | Coming soon |
-| SO-101 | RTC inference | Coming soon |
-| RoboTwin | adjust bottle inference: clip 1 | Coming soon |
-| RoboTwin | adjust bottle inference: clip 2 | Coming soon |
-| RECAP | Autonomous inference: leader and follower in the same view | Coming soon |
-| RECAP | Human intervention: correction and return to policy control | Coming soon |
+Coming soon.
+
+<!-- ![SO-101 Guided RTC](media/so101_rtc.gif) -->
+
+**RoboTwin: Adjust Bottle**
+
+Coming soon.
+
+<!-- ![RoboTwin adjust bottle](media/robotwin_adjust_bottle_1.gif) -->
+
+**SO-101 RECAP Autonomous Inference**
+
+Coming soon.
+
+<!-- ![SO-101 RECAP autonomous inference](media/recap_autonomous.gif) -->
 
 ## Contents
 
@@ -43,12 +49,15 @@ Use separate environments to avoid dependency conflicts:
 | Conda `openpi-recap-value` | 3.11 | Independent value-model training and advantage labeling |
 | Conda `RoboTwin` | 3.10 | RoboTwin simulation and evaluation clients |
 
-Run commands from the repository root unless stated otherwise. Replace `/path/to/openpi` with your checkout path and set `PROJECT_ROOT` in each terminal:
+Clone this repository together with its submodules:
 
 ```bash
-cd /path/to/openpi
+git clone --recurse-submodules https://github.com/StevenXu945/pi05-so101-post-training.git
+cd pi05-so101-post-training
 export PROJECT_ROOT="$PWD"
 ```
+
+Run subsequent commands from the repository root unless stated otherwise. In each new terminal, enter the repository directory and set `PROJECT_ROOT="$PWD"`.
 
 ### 1.1 openpi: Official Installation
 
@@ -119,6 +128,18 @@ hf download ybpy/vlm_ckpt \
 
 <a id="so101"></a>
 ## 2. SO-101 Hardware Post-Training and Deployment
+
+**GIF demos** — add the files under `media/` and replace the placeholders with inline images.
+
+| Data collection: three combined views | Standard inference | RTC inference |
+|---|---|---|
+| Coming soon | Coming soon | Coming soon |
+
+<!-- Replace the placeholders with:
+![Three-view data collection](media/so101_collection.gif)
+![Standard inference](media/so101_inference.gif)
+![Guided RTC inference](media/so101_rtc.gif)
+-->
 
 ### 2.1 Assembly, Motor Setup, and Calibration
 
@@ -211,7 +232,8 @@ python scripts/eval_so101.py \
   --port-arm=/dev/ttyACM0 --robot-id=my_awesome_follower_arm \
   --front-camera=0 --wrist-camera=2 --host=127.0.0.1 --server-port=8000 \
   --prompt="Grab the toy into the box" \
-  --duration=40 --fps=30 --chunk-exec=8 --execute
+  --duration=40 --fps=30 --chunk-exec=8 --execute \
+  --video-dir=eval_result/so101_standard_run1
 ```
 
 ### 2.6 RTC Inference
@@ -224,12 +246,26 @@ python scripts/eval_so101.py \
   --front-camera=0 --wrist-camera=2 --host=127.0.0.1 --server-port=8000 \
   --prompt="Grab the toy into the box" --duration=40 --fps=30 \
   --rtc --rtc-inference-delay=6 --rtc-execution-horizon=8 \
-  --rtc-max-guidance-weight=10 --execute
+  --rtc-max-guidance-weight=10 --execute \
+  --video-dir=eval_result/so101_rtc_run1
 ```
+
+Optional `--video-dir` saves full-resolution RGB camera views as `front.mp4` and `wrist.mp4`, with a `recording.json` summary. Recording starts after arming and runs in a background thread, including inference waits. Video timestamps follow elapsed time; the requested FPS is a sampling target, not a guarantee. Use a new output directory for each run. Dry runs do not record.
 
 
 <a id="robotwin"></a>
 ## 3. RoboTwin 2.0 Post-Training and Simulation
+
+**GIF demos: adjust bottle**
+
+| Inference: clip 1 | Inference: clip 2 |
+|---|---|
+| Coming soon | Coming soon |
+
+<!-- Replace the placeholders with:
+![Adjust bottle: clip 1](media/robotwin_adjust_bottle_1.gif)
+![Adjust bottle: clip 2](media/robotwin_adjust_bottle_2.gif)
+-->
 
 ### 3.1 Install the Simulation Environment
 
@@ -335,6 +371,17 @@ Match the task to your training data. Videos are saved by default (ffmpeg requir
 
 <a id="recap"></a>
 ## 4. SO-101 RECAP: Collection, Value Training, and Policy Iteration
+
+**GIF demos**
+
+| Autonomous inference: leader and follower | Human intervention and return to policy control |
+|---|---|
+| Coming soon | Coming soon |
+
+<!-- Replace the placeholders with:
+![RECAP autonomous inference](media/recap_autonomous.gif)
+![RECAP human intervention](media/recap_intervention.gif)
+-->
 
 Workflow: **SFT initialization → rollouts → cumulative data pool → value training → advantage labeling → conditioned policy training → deployment and next-round collection**. The value model runs offline only.
 

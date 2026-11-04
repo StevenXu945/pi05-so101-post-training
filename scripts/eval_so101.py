@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from pathlib import Path
 import time
 
 import numpy as np
@@ -46,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-gripper-step", type=float, default=20.0)
     parser.add_argument("--hold-on-exit", type=float, default=1.0)
     parser.add_argument("--execute", action="store_true", help="Enable motor commands after first-action review")
+    parser.add_argument("--video-dir", type=Path, help="New output directory for front.mp4 and wrist.mp4; starts after arming")
     args = parser.parse_args()
     values = (args.duration, args.fps, args.max_arm_step, args.max_gripper_step, args.hold_on_exit)
     if not all(np.isfinite(values)) or any(value <= 0 for value in values[:4]) or args.hold_on_exit < 0:
@@ -54,6 +56,8 @@ def parse_args() -> argparse.Namespace:
         parser.error(f"--chunk-exec must be between 1 and {ACTION_HORIZON}")
     if args.front_camera == args.wrist_camera:
         parser.error("front and wrist cameras must use different indices")
+    if args.video_dir is not None and args.video_dir.exists():
+        parser.error("--video-dir must be a new directory; existing recordings are not overwritten")
     if args.rtc:
         if not 0 <= args.rtc_inference_delay <= args.rtc_execution_horizon < ACTION_HORIZON:
             parser.error("RTC requires 0 <= inference delay <= execution horizon < 16")
@@ -181,7 +185,7 @@ def warmup_rtc(client, observation: dict, actions: np.ndarray, args: argparse.Na
     LOG.info("RTC guidance warmup finished in %.1f s", time.monotonic() - started)
 
 
-def run_rtc(args: argparse.Namespace, robot, client) -> None:
+def run_rtc(args: argparse.Namespace, robot, client, recorder=None) -> None:
     observation, state = make_observation(robot, args.prompt)
     actions = read_actions(client.infer(observation))
     warmup_rtc(client, observation, actions, args)
@@ -199,6 +203,9 @@ def run_rtc(args: argparse.Namespace, robot, client) -> None:
     actions = read_actions(client.infer(observation))
     check_chunk(actions, state, args.max_arm_step, args.max_gripper_step)
     check_transition(actions[0], state, args.max_arm_step, args.max_gripper_step)
+
+    if recorder is not None:
+        recorder.start()
 
     runner = AsyncInferenceRunner(client)
     action_idx = 0
@@ -288,13 +295,19 @@ def run(args: argparse.Namespace) -> None:
 
     client = websocket_client_policy.WebsocketClientPolicy(host=args.host, port=args.server_port)
     LOG.info("Connected to policy server; metadata: %s", client.get_server_metadata())
+    recorder = None
     try:
         robot.connect(calibrate=False)
         if not robot.is_calibrated:
             raise RuntimeError("SO-101 calibration does not match the selected robot ID")
 
+        if args.video_dir is not None:
+            from so101_video import CameraVideoRecorder
+
+            recorder = CameraVideoRecorder(robot.cameras, args.video_dir, args.fps)
+
         if args.rtc:
-            run_rtc(args, robot, client)
+            run_rtc(args, robot, client, recorder)
             return
 
         armed = False
@@ -319,6 +332,8 @@ def run(args: argparse.Namespace) -> None:
                 print("First policy target:", np.round(selected[0], 2))
                 print("First target minus current:", np.round(selected[0] - state, 2))
                 input("Review the target, then press Enter to arm (Ctrl+C aborts): ")
+                if recorder is not None:
+                    recorder.start()
                 armed = True
                 started = time.monotonic()
                 # Refresh the observation after the review pause.
@@ -340,8 +355,14 @@ def run(args: argparse.Namespace) -> None:
             LOG.info("cycle=%d executed=%d elapsed=%.1f s", cycle, executed,
                      time.monotonic() - started)
     finally:
-        client.close()
-        safe_shutdown(robot, args.hold_on_exit)
+        try:
+            client.close()
+        finally:
+            try:
+                if recorder is not None:
+                    recorder.close()
+            finally:
+                safe_shutdown(robot, args.hold_on_exit)
 
 
 if __name__ == "__main__":
