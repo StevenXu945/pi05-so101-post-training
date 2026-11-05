@@ -8,7 +8,7 @@ Built on [openpi](https://github.com/Physical-Intelligence/openpi), this project
 
 RECAP starts from task-specific SFT and does not reproduce the full official π*₀.₆ pretraining pipeline. Hardware examples use `Grab the toy into the box`; keep task instructions consistent across collection, training, and inference.
 
-## Demo Highlights
+## Demos
 
 **(1) SO-101 Standard Inference**
 
