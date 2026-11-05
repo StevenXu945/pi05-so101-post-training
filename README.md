@@ -21,11 +21,11 @@ RECAP starts from task-specific SFT and does not reproduce the full official π*
 **(3) RoboTwin 2.0 Inference**
 
 <p>
-  <img src="docs/adjust_bottle_0.gif" alt="RoboTwin 2.0 Inference: clip 1" width="30%" />
-  <img src="docs/adjust_bottle_1.gif" alt="RoboTwin 2.0 Inference: clip 2" width="30%" />
+  <img src="docs/adjust_bottle_0.gif" alt="RoboTwin 2.0 Inference: clip 1" width="32%" />
+  <img src="docs/adjust_bottle_1.gif" alt="RoboTwin 2.0 Inference: clip 2" width="32%" />
 </p>
 
-**(4) RECAP Rollout and Human-in-the-Loop**
+**(4) RECAP**
 
 <table>
   <tr>
