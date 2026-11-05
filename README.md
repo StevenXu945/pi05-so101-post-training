@@ -10,23 +10,33 @@ RECAP starts from task-specific SFT and does not reproduce the full official π*
 
 ## Demo Highlights
 
-**SO-101 Guided RTC**
+**(1) SO-101 Standard Inference**
 
-Coming soon.
+![SO-101 Standard Inference](docs/front_wrist_normal.gif)
 
-<!-- ![SO-101 Guided RTC](media/so101_rtc.gif) -->
+**(2) SO-101 RTC Inference**
 
-**RoboTwin: Adjust Bottle**
+![SO-101 RTC Inference](docs/front_wrist_rtc.gif)
 
-Coming soon.
+**(3) RoboTwin 2.0 Inference**
 
-<!-- ![RoboTwin adjust bottle](media/robotwin_adjust_bottle_1.gif) -->
+<p>
+  <img src="docs/adjust_bottle_0.gif" alt="RoboTwin 2.0 Inference: clip 1" width="49%" />
+  <img src="docs/adjust_bottle_1.gif" alt="RoboTwin 2.0 Inference: clip 2" width="49%" />
+</p>
 
-**SO-101 RECAP Autonomous Inference**
+**(4) RECAP Rollout and Human-in-the-Loop**
 
-Coming soon.
-
-<!-- ![SO-101 RECAP autonomous inference](media/recap_autonomous.gif) -->
+<table>
+  <tr>
+    <th width="50%">rollout</th>
+    <th width="50%">hil</th>
+  </tr>
+  <tr>
+    <td><img src="docs/recap_rollout_cropped.gif" alt="RECAP rollout" width="100%" /></td>
+    <td><img src="docs/recap_hil_cropped.gif" alt="RECAP human-in-the-loop" width="100%" /></td>
+  </tr>
+</table>
 
 ## Contents
 
@@ -128,18 +138,6 @@ hf download ybpy/vlm_ckpt \
 
 <a id="so101"></a>
 ## 2. SO-101 Hardware Post-Training and Deployment
-
-**GIF demos** — add the files under `media/` and replace the placeholders with inline images.
-
-| Data collection: three combined views | Standard inference | RTC inference |
-|---|---|---|
-| Coming soon | Coming soon | Coming soon |
-
-<!-- Replace the placeholders with:
-![Three-view data collection](media/so101_collection.gif)
-![Standard inference](media/so101_inference.gif)
-![Guided RTC inference](media/so101_rtc.gif)
--->
 
 ### 2.1 Assembly, Motor Setup, and Calibration
 
@@ -256,17 +254,6 @@ Optional `--video-dir` saves full-resolution RGB camera views as `front.mp4` and
 <a id="robotwin"></a>
 ## 3. RoboTwin 2.0 Post-Training and Simulation
 
-**GIF demos: adjust bottle**
-
-| Inference: clip 1 | Inference: clip 2 |
-|---|---|
-| Coming soon | Coming soon |
-
-<!-- Replace the placeholders with:
-![Adjust bottle: clip 1](media/robotwin_adjust_bottle_1.gif)
-![Adjust bottle: clip 2](media/robotwin_adjust_bottle_2.gif)
--->
-
 ### 3.1 Install the Simulation Environment
 
 Follow the [official RoboTwin installation guide](https://robotwin-platform.github.io/doc/usage/robotwin-install.html) to prepare Vulkan, GPU drivers, ffmpeg, and simulation assets:
@@ -371,17 +358,6 @@ Match the task to your training data. Videos are saved by default (ffmpeg requir
 
 <a id="recap"></a>
 ## 4. SO-101 RECAP: Collection, Value Training, and Policy Iteration
-
-**GIF demos**
-
-| Autonomous inference: leader and follower | Human intervention and return to policy control |
-|---|---|
-| Coming soon | Coming soon |
-
-<!-- Replace the placeholders with:
-![RECAP autonomous inference](media/recap_autonomous.gif)
-![RECAP human intervention](media/recap_intervention.gif)
--->
 
 Workflow: **SFT initialization → rollouts → cumulative data pool → value training → advantage labeling → conditioned policy training → deployment and next-round collection**. The value model runs offline only.
 
