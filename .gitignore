@@ -184,3 +184,6 @@ cython_debug/
 /docs/robotwin_50ep_train_deploy.md
 /docs/so101_recap.md
 /docs/so101_train_deploy_inference.md
+
+# Local SO-101 recordings, including numbered data directories.
+/so101_hil_lite/data*/

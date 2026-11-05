@@ -1,25 +1,31 @@
-# SO-101 lightweight human-in-loop collection
+# SO-101 lightweight human-in-the-loop collection
 
-本目录使用官方 LeRobot，而非 Evo-RL 分支。固定版本：
-`huggingface/lerobot@145cc7ea53e5864bd5efec4e9bb70ee799e47bd8`。
-该版本要求 Python 3.12，并实现 SO leader 的 `send_feedback()`、
-`enable_torque()`、`disable_torque()`。官方依赖仅安装到本目录 `.venv`。
+This directory provides real-robot collection with policy execution, keyboard-driven
+human intervention, dataset validation, and RECAP conversion and merging. It uses
+official LeRobot, pinned to
+`huggingface/lerobot@145cc7ea53e5864bd5efec4e9bb70ee799e47bd8`, rather than the
+Evo-RL fork. This revision requires Python 3.12 and provides the SO leader APIs
+`send_feedback()`, `enable_torque()`, and `disable_torque()`.
 
-## 安装
+## Installation
+
+From the repository root:
 
 ```bash
-cd "/home/huayi/PycharmProjects/openpi (copy)/so101_hil_lite"
+cd so101_hil_lite
 bash setup_env.sh
 source .venv/bin/activate
 ```
 
-需要 uv、可下载 Python 3.12 和依赖的网络，以及 Linux 终端。
-安装脚本不修改项目根目录环境，也不修改已有 `so101_hil` 环境。
-官方 LeRobot 仍依赖 PyTorch；轻量指采集代码和运行逻辑的范围，非零 ML 依赖。
+You need `uv`, network access to download Python 3.12 and dependencies, and an
+interactive Linux terminal. The setup script installs dependencies into this
+directory's `.venv`; it does not modify the root project environment or an existing
+`so101_hil` environment. Official LeRobot still depends on PyTorch: “lightweight”
+refers to the collection code and runtime workflow, not the absence of ML dependencies.
 
-## 终端 1：启动模型
+## Terminal 1: start the policy server
 
-在项目根目录使用原 openpi 环境：
+Use the existing openpi environment from the repository root:
 
 ```bash
 .venv/bin/python scripts/serve_policy.py policy:checkpoint \
@@ -28,11 +34,13 @@ source .venv/bin/activate
   --port=8000
 ```
 
-配置名与 checkpoint 必须匹配；任务模型需要已经学过方块堆叠。
+The configuration must match the checkpoint. For this example, the policy must
+already have learned the cube-stacking task.
 
-## 终端 2：读取观测与推理验证
+## Terminal 2: verify observations and inference
 
-在本目录激活新环境，替换设备路径、相机索引和已校准的 ID：
+Activate the collection environment in this directory. Replace the device paths,
+camera indices, and robot IDs with those for your calibrated hardware:
 
 ```bash
 python record.py \
@@ -43,13 +51,20 @@ python record.py \
   --dry-run
 ```
 
-dry-run 连接设备、读取观测和请求一次推理，但不发送关节目标。
-两臂先用固定版本官方 LeRobot 校准；启动使用 `calibrate=False`，不隐式重标定。
-旧版本校准格式不兼容时应重新校准，不要覆盖原环境校准文件。
+The dry run connects the devices, reads observations, and requests one inference
+without sending joint targets. Calibrate both arms with the pinned official
+LeRobot version first. Connections use `calibrate=False` and do not implicitly
+recalibrate. If an older calibration format is incompatible, recalibrate without
+overwriting calibration files used by the original environment.
 
-## 采集
+The default policy endpoint is `127.0.0.1:8000`; use `--host` and `--port` to change
+it. The default `--prompt` is `Stack the red cube on top of the blue cube`.
+`--policy-id` records the collector policy version in dataset metadata; it does
+not select the checkpoint served by the policy server.
 
-移除 `--dry-run`，指定全新数据目录：
+## Collect episodes
+
+Remove `--dry-run` and choose a new dataset directory:
 
 ```bash
 python record.py \
@@ -61,46 +76,80 @@ python record.py \
   --episodes=10 --duration=30 --fps=30
 ```
 
-首次推理用于热身并打印目标。每轮先按 Enter 开启遥操作对齐：leader 释放扭矩，
-follower 按步幅限制跟随 leader。拖动 leader 摆好初始姿态、摆放方块后，
-再次按 Enter 检查对齐并切入策略。对齐阶段不写入数据。
-自主时 leader 会主动跟随。前五关节使用度数，夹爪保持官方 0–100 标度。
-操作键需在运行程序的终端输入，不依赖全局键盘监听：
+The first inference warms up the policy and prints its target. Before each episode,
+leader torque is disabled. Press **Enter** to enable follower tracking, then move
+the leader to set the starting pose and arrange the cubes. Press **Enter** again
+to check alignment and start the policy. Alignment frames are not recorded.
+During autonomous execution, the leader actively follows the accepted follower
+targets. The first five joints use degrees; the gripper uses LeRobot's 0–100 scale.
 
-* 自主时按 `i`：暂停策略，两臂保持位置，leader 仍有扭矩支撑。
-* 握稳并托住 leader 后按 Enter：释放 leader 扭矩，开始人工控制。
-* 人工控制时按 `i`：检查对齐、清缓存并交回策略。
-* `s`：成功结束；`f`：失败结束。
-* `q`：记录为 aborted 并退出。
-* 超时后必须输入 success、failure 或 aborted，不默认判失败。
+Enter controls in the terminal running the recorder; no global keyboard listener
+is used:
 
-结束后 leader 释放扭矩，follower 保持当前姿态等待人工复位；没有自动回零。
-交回策略时先写当前保持目标，再开启 leader 扭矩；位置差超限则终止该轮。
-动作步幅默认前五关节 6.51、夹爪 20，可通过命令行调整。
-策略或人工目标超出单步范围时，按上一发送目标及当前测量位置限幅，并打印
-raw -> command 提示；原始目标保存在 selected_action，接受目标保存在 action。
-若测量位置和上次发送目标偏离过大、无法同时满足限制，则停止并报 tracking gap。
+| Key / event | Behavior |
+| --- | --- |
+| `i` during policy execution | Pause the policy and hold both arms, keeping leader torque enabled. |
+| **Enter** while paused | Release leader torque and begin manual control. Grip and support the leader before confirming. |
+| `i` during manual control | Check alignment, clear cached policy actions, and return control to the policy. If alignment fails, remain in manual control and retry after aligning. |
+| `s` | End the episode as `success`. |
+| `f` | End the episode as `failure`. |
+| `q` | Save the episode as `aborted` and exit. |
+| Time limit reached | Explicitly enter `success`, `failure`, or `aborted`; there is no default outcome. |
 
-推理采用同步请求，默认每个动作块使用前 8 步。请求期间不会发出下一步动作，
-实际采集速率会受网络和推理延迟影响，不能保证恒定 30 Hz；请求超时默认 10 秒。
-键盘事件在循环边界处理，因此推理等待期间的接管响应也会延迟。
+At episode end, the leader releases torque and the follower holds its current
+pose for manual reset. There is no automatic return to a home pose. Before
+returning to policy control, the controller checks alignment and writes a
+current-position hold target before enabling leader torque.
 
-## 数据与后续处理
+Default per-step limits are 6.51 degrees for the first five joints and 20 for the
+gripper. Adjust them with `--max-arm-step` and `--max-gripper-step`. Policy and
+manual targets are clipped relative to both the previous sent target and the
+current measured position. Rate-limit messages show `raw -> command`; the raw
+target is saved as `selected_action`, and the accepted target as `action`. If a
+tracking gap makes both limits impossible to satisfy, collection stops with an
+error.
 
-LeRobot 保存图像、state 和 action；`action` 使用 follower.send_action 返回的
-实际接受目标，不是实际测量到的下一时刻关节位置。
-额外逐帧字段为 selected_action、policy_action、policy_action_valid、
-is_intervention 和 elapsed_s。人工接管时 policy_action_valid=0，策略动作占位为零。
-episode 结果和采集策略版本存放在数据集根目录 `outcomes.jsonl`。
-这是自有 sidecar，不是 Evo-RL 的 episode_success 元数据；后续转换器必须读取它。
-缺少 sidecar 记录的 episode 不能默认当作失败，应视作待检查数据。
-aborted 轨迹应在训练转换时排除。暂停确认阶段以 is_paused=1 单独标记，
-不计入 duration，但保留实际 elapsed_s；这些保持动作帧应在训练转换时检查处理。
-数据路径已存在时拒绝覆盖，本版不支持续录。
+Inference requests are synchronous. By default, the recorder uses the first eight
+actions of each returned chunk (`--chunk-steps=8`), with a request timeout of
+10 seconds (`--timeout=10`). No next action is sent while waiting for inference.
+Network and inference latency therefore affect the actual collection rate;
+`--fps=30` does not guarantee a constant 30 Hz. Keyboard events are handled at
+loop boundaries, so takeover can also be delayed during an inference request.
 
-## 阶段 3：校验与转换
+For an advantage-conditioned RECAP policy, `--advantage=positive` or
+`--advantage=negative` adds `adv_ind` to inference requests. Omit this option for
+the original LoRA workflow.
 
-工具与采集程序共用本目录环境，无需安装另一个 LeRobot 版本：
+## Recorded data
+
+LeRobot stores camera images, `observation.state`, and `action`. Here, `action` is
+the accepted target returned by `follower.send_action()`, not the measured joint
+position at the next timestep. Additional per-frame fields use the
+`complementary_info.` prefix:
+
+| Field | Meaning |
+| --- | --- |
+| `selected_action` | Target selected before rate limiting. |
+| `policy_action` | Raw policy target, or a zero placeholder when unavailable. |
+| `policy_action_valid` | Whether the frame contains a valid policy target; zero during manual control and takeover pauses. |
+| `is_intervention` | Whether manual control is active. |
+| `is_paused` | Whether the recorder is holding while waiting for takeover confirmation. |
+| `elapsed_s` | Actual elapsed time since the episode started. |
+
+Episode outcomes and collector policy versions are saved in `outcomes.jsonl` at
+the dataset root. This is a custom sidecar, not Evo-RL's `episode_success`
+metadata; downstream converters must read it. Episodes missing sidecar records
+require inspection and must not be assumed to be failures. Exclude aborted
+trajectories from training conversion.
+
+Takeover-confirmation pauses are recorded with `is_paused=1`. They do not count
+toward `--duration`, but `elapsed_s` retains wall-clock elapsed time. Handle these
+hold frames explicitly during training conversion. Existing dataset paths are
+rejected to prevent overwrites; resuming collection is not supported.
+
+## Validate and convert to RECAP
+
+Use the same environment as the recorder; no additional LeRobot version is needed:
 
 ```bash
 python check_dataset.py data/stack_v1 --report=stack_v1_report.json
@@ -108,30 +157,58 @@ python convert_to_recap.py data/stack_v1 data/stack_v1_recap_v21 \
   --fps=30 --task-max-steps=1201 --round-id=1 --validation-episodes 1
 ```
 
-输出目录必须全新，原始数据不修改。转换器输出旧版 openpi 可读的 LeRobot
-v2.1：每个 episode 的 parquet、重新编码并对齐的视频，以及 meta 目录。
-它排除 aborted，去除暂停帧和暂停时长，以前一源帧保持的方式重采样图像、
-状态和动作；终帧保留，source_frame_index 提供溯源。超过 0.5 秒的活动采样
-空档默认拒绝；检查报告后可用 --max-gap-s 显式调整，不能恢复缺失的真实观测。
+The destination must be new. Conversion leaves the source unchanged and produces
+LeRobot v2.1 data readable by the older openpi pipeline: per-episode Parquet files,
+re-encoded and aligned videos, and a `meta` directory.
 
-标签采用 paper-v1：非终帧 raw reward=-1，成功终帧=0，失败终帧=-C_fail。
-每任务在训练 episode 上拟合固定归一化尺度，reward_label 为归一化奖励，
-value_label 为其精确累计回报。人工帧 positive、自主帧 none。
-用 --validation-episodes 指定源 episode 的验证集 ID；尺度和划分存入
-meta/conversion.json。完整训练需显式留出验证 episode。
-旧 remaining-time-v1 数据应重新转换，不直接用于新的价值训练。
-详见 ../docs/so101_recap.md 和 ../value_runtime/README.md。
+The converter excludes aborted episodes, removes paused frames and pause time,
+and resamples images, states, and actions by holding the preceding source frame.
+It preserves the terminal frame and stores `source_frame_index` for traceability.
+Active sampling gaps longer than 0.5 seconds are rejected by default. After
+reviewing the report, you can adjust `--max-gap-s`; this cannot recover missing
+observations.
 
-输出带 meta/recap_manifest.json，可由 merge_recap_datasets.py 合并演示和历轮 rollout。
-当前 RECAP 配置读取 adv_ind；原 LoRA 配置保持原行为。后续轮次必须通过
---task-scales-json 复用首轮任务尺度。不要在价值训练前额外做条件策略热身。
-将目标路径设到项目现有 HF_LEROBOT_HOME/repo_id 下，或按既有训练流程注册
-该本地数据集；转换器本身不改训练配置和缓存位置。
+Labels use the `paper-v1` recipe:
 
-完整累计迭代、v2.1 演示导入、阈值统计和运行命令见 ../docs/so101_recap.md。
+- Nonterminal raw reward: `-1`.
+- Successful terminal reward: `0`.
+- Failed terminal reward: `-C_fail`.
+- `reward_label`: reward normalized with a fixed per-task scale fitted on training episodes.
+- `value_label`: the exact cumulative return of the normalized rewards.
+- Human intervention frames: `positive`; autonomous frames: `none`.
 
-## 代码分组
+Use `--validation-episodes` to specify source episode IDs to hold out. Scales and
+splits are saved in `meta/conversion.json`. Explicitly reserve validation episodes
+for a full training run. Reconvert older `remaining-time-v1` datasets before using
+them for the current value-training workflow.
 
-本目录集中真机采集、人工接管、数据检查、转换和合并。独立价值模型训练与优势
-标注现统一在 ../value_runtime/，主入口为 train.py 和 label_advantage.py。
-目录总览见 ../docs/code_layout.md。已有环境、校准、数据路径和录制命令不变。
+The output includes `meta/recap_manifest.json` for merging demonstrations and
+rollouts from successive rounds with `merge_recap_datasets.py`. Later rounds must
+reuse the first round's task scales through `--task-scales-json`. The current
+RECAP configuration reads `adv_ind`; the original LoRA configuration retains its
+existing behavior. Do not add a conditional-policy warm-up before value training.
+
+Place the converted dataset under the existing `HF_LEROBOT_HOME/repo_id` location,
+or register it through your training workflow. The converter does not change
+training configurations or cache locations.
+
+See the [SO-101 RECAP guide](../docs/so101_recap.md) for the cumulative iteration
+workflow, v2.1 demonstration import, threshold statistics, and runtime commands.
+See also the [value runtime README](../value_runtime/README.md).
+
+## Code layout
+
+| File | Purpose |
+| --- | --- |
+| `record.py` | Hardware setup, episode loop, alignment, and terminal controls. |
+| `controller.py` | Control ownership, takeover transitions, and action limits. |
+| `remote_policy.py` / `codec.py` | WebSocket inference client and message serialization. |
+| `recording.py` | LeRobot frame writing and outcome sidecar metadata. |
+| `check_dataset.py` / `dataset_tools.py` | Dataset validation, resampling helpers, and labels. |
+| `convert_to_recap.py` | Conversion to the RECAP v2.1 dataset format. |
+| `merge_recap_datasets.py` | Demonstration import and cumulative dataset merging. |
+
+Standalone value-model training and advantage labeling live in
+[`../value_runtime/`](../value_runtime/), with `train.py` and `label_advantage.py`
+as the main entry points. See the [repository code layout](../docs/code_layout.md)
+for the broader structure.
