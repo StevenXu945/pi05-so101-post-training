@@ -1,17 +1,21 @@
-# 从当前 openpi 项目启动 RoboTwin 评测
+# Run RoboTwin Evaluation from This openpi Project
 
-本目录移植 RoboTwin/scripts/eval_openpi.py 与 eval_openpi.sh 的运行入口。
-仍依赖原 RoboTwin checkout 的 envs、assets、env_cfg 和 description，以及现有
-RoboTwin Conda 环境；不把 SAPIEN 等依赖安装进 openpi 或价值模型环境。
-原 RoboTwin 下两个文件保留，未修改。
+This directory provides entry points adapted from `RoboTwin/scripts/eval_openpi.py`
+and `eval_openpi.sh`. It requires the original RoboTwin checkout's `envs`, `assets`,
+`env_cfg`, and `description` directories, plus an existing RoboTwin Conda environment.
+Keep simulation dependencies such as SAPIEN in that environment. The two original
+scripts in the RoboTwin checkout remain unchanged.
 
-## 1. 策略服务
+## 1. Policy Server
 
-在 openpi 原环境启动现有 RoboTwin checkpoint 服务，使用与 checkpoint 匹配的
-pi05_robotwin_50ep_lora_finetune 等配置。服务端必须返回 (16, 14) 动作，不能使用
-返回六维动作的 SO-101 checkpoint。已有服务可以继续使用。
+Start a RoboTwin checkpoint server in the openpi environment with a matching
+configuration, such as `pi05_robotwin_50ep_lora_finetune`. The server must return
+`(16, 14)` actions; SO-101 checkpoints return six-dimensional actions and are
+incompatible. An existing compatible server can be reused.
 
-## 2. 校验配置（不启动仿真、不连接策略服务）
+## 2. Validate Configuration
+
+This checks configuration without starting simulation or connecting to the policy server.
 
 ```bash
 conda activate RoboTwin
@@ -21,12 +25,13 @@ bash robotwin_eval/eval_openpi.sh \
   --task-name=place_a2b_left --task-config=demo_clean --validate-only
 ```
 
-默认 RoboTwin 位置为当前项目的同级 ../RoboTwin，可用 --robotwin-root 或
-ROBOTWIN_ROOT 环境变量指定。OPENPI_ROOT 默认由本目录位置自动确定。
+The default RoboTwin location is `../RoboTwin`, alongside this project. Override it
+with `--robotwin-root` or the `ROBOTWIN_ROOT` environment variable. `OPENPI_ROOT`
+is inferred from this directory's location by default.
 
-## 3. 仿真评测
+## 3. Simulation Evaluation
 
-确认策略服务已启动、任务与训练模型匹配后：
+Start the policy server and select a task matching the trained model, then run:
 
 ```bash
 bash robotwin_eval/eval_openpi.sh \
@@ -35,10 +40,11 @@ bash robotwin_eval/eval_openpi.sh \
   --host=127.0.0.1 --port=8000 --episodes=5 --exec-steps=8
 ```
 
-视频默认开启，需要 ffmpeg；--no-video 可关闭。--expert-check 会在每轮先运行
-专家检查。其余参数保持原脚本行为。task-name 请替换为实际评测任务。
+Video recording is enabled by default and requires ffmpeg; use `--no-video` to
+disable it. `--expert-check` runs an expert check before each episode. Other options
+retain the original script's behavior. Replace `--task-name` with your evaluation task.
 
-结果默认保存到本项目：
+Results are saved under this project by default:
 
 ```text
 eval_result/robotwin_openpi/<task>/<config>/<timestamp>/
@@ -47,13 +53,15 @@ eval_result/robotwin_openpi/<task>/<config>/<timestamp>/
   ...
 ```
 
---output-dir 可指定其他路径；相对路径按启动时的工作目录解析。Python 子进程
-会切到 RoboTwin 根目录以兼容仿真内部的相对资源路径，调用终端仍在当前项目。
+Use `--output-dir` to choose another location. Relative paths resolve against the
+working directory at launch. The Python subprocess switches to the RoboTwin root
+for relative simulation asset paths; the calling terminal stays in this project.
 
-也可以在已激活 RoboTwin 环境后直接运行：
+After activating the RoboTwin environment, you can also run Python directly:
 
 ```bash
 python robotwin_eval/eval_openpi.py --task-name=place_a2b_left --episodes=5
 ```
 
-本次只验证了真实配置读取、入口和模拟 rollout，未启动实际仿真评测。
+Validation to date covers configuration loading, entry points, and mocked rollouts.
+Actual simulation evaluation has not been run as part of that validation.
