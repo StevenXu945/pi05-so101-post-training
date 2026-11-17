@@ -1,12 +1,12 @@
-# π₀.₅ Post-Training and Deployment
+# π₀.₅ Post-Training, RTC & RECAP
 
-Built on [openpi](https://github.com/Physical-Intelligence/openpi), this project supports:
+Built on [openpi](https://github.com/Physical-Intelligence/openpi), this project reproduces π₀.₅ post-training and deployment in both real-world and simulated environments, implements Guided Real-Time Chunking (RTC) on SO-101, and reproduces the RECAP framework for iterative policy improvement.
 
-- **SO-101**: LoRA post-training, standard inference, and Guided RTC.
-- **RoboTwin 2.0**: LoRA post-training and simulation evaluation.
-- **RECAP**: autonomous and human-intervention collection, value training, and advantage-conditioned policy iteration.
+The project covers three main components:
 
-RECAP starts from task-specific SFT and does not reproduce the full official π*₀.₆ pretraining pipeline.
+- **Post-Training & Deployment**: LoRA fine-tuning, policy inference, and deployment on SO-101 (real robot) and RoboTwin 2.0 (simulation).
+- **Guided RTC on SO-101**: Implementation of Guided Real-Time Chunking for responsive real-time inference and smoother action execution on the physical robot SO-101.
+- **RECAP（π*₀.₆）**: Reproduction of RECAP, including autonomous rollouts, human-intervention data collection, value model training, and advantage-conditioned policy iteration.
 
 ## Demos
 
